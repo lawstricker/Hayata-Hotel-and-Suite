@@ -10,6 +10,7 @@ A polished, production-style frontend for a complete hotel operations platform. 
 - **Real-time inventory engine** with a fake WebSocket event bus, live stock movements, low-stock crossings, animated notifications, alerts, ledger, adjustments, transfers, requisitions, purchase orders, suppliers, and stock takes.
 - **Complete hotel operations** including reservation calendar/list, check-in/out, room rack, availability grid, housekeeping drag-and-drop board, maintenance tickets, guest 360° profiles, CRM campaigns, NPS, folios, invoices, and payments.
 - **Restaurant and bar POS** with category browsing, modifiers, table/order type, discounts, tips, split bills, age verification, checkout, KDS workflow, menu management, tabs, and room transfers.
+- **In-room QR dining** with one unique menu code per checked-in stay, printable door cards, a public guest ordering flow, room-service tickets in the kitchen, and folio-based charges.
 - **Enterprise design system** built with Tailwind CSS 4 and Radix-based shadcn-style primitives, including light/dark themes, persistent sidebar, command palette, notifications, skeletons, toasts, responsive mobile navigation, and accessible focus states.
 - **Subtle motion** with Framer Motion for route transitions, KPI updates, POS interactions, and live feedback.
 
@@ -61,6 +62,25 @@ npm run lint
 
 The route tree is lazy-loaded, and `vite.config.ts` splits the largest vendor dependencies into dedicated production chunks for charts, Radix UI, Framer Motion, forms, dates, icons, and the React runtime. This keeps feature modules independently cacheable and avoids loading POS, reporting, inventory, and administration code until it is requested.
 
+### Thermal printer bridge
+
+Room QR orders are sent to an HTTP print bridge, which forwards an ESC/POS receipt to the thermal printer over TCP. Browsers cannot open raw printer sockets, so the bridge is required:
+
+```bash
+npm run print-bridge
+```
+
+By default it listens on port `8787` and forwards to `127.0.0.1:9100`. Configure these environment variables as needed:
+
+- `BRIDGE_PORT` — bridge listen port
+- `PRINTER_IP` — default thermal printer local IP
+- `PRINTER_PORT` — default thermal printer port, usually `9100`
+- `BRIDGE_TOKEN` — optional shared secret
+- `ALLOWED_ORIGIN` — CORS origin, defaults to `*`
+- `DRY_RUN=1` — log receipts without sending them to a printer
+
+In **Settings → Kitchen printer**, enter the bridge IP/hostname and port that the guest device can reach, plus the thermal printer’s local IP and port. Use an HTTPS reverse proxy on the bridge when the app is deployed over HTTPS; browsers block mixed-content requests from HTTPS pages to plain HTTP hosts.
+
 ## Demo credentials
 
 Every account uses the password **`demo123`**.
@@ -92,7 +112,7 @@ Use the **role switcher in the avatar menu** to preview every permission set ins
 src/
 ├── app/            # Lazy-loaded application route tree
 ├── components/     # UI primitives, layout, data table, shared states
-├── features/       # Auth, dashboard, hotel ops, CRM, POS, inventory, finance
+├── features/       # Auth, dashboard, hotel ops, guest ordering, CRM, POS, inventory, finance
 ├── hooks/          # Real-time simulation and feature hooks
 ├── lib/            # RBAC matrix and utilities
 ├── mock/           # Seed data, fake API, event bus
@@ -144,6 +164,11 @@ src/
 - [x] Age verification for restricted products
 - [x] Live kitchen/bar display workflow
 - [x] Menu, table, order, and bar-tab management
+- [x] One permanent QR menu code per room, reusable by every guest
+- [x] Guest-facing kitchen ordering with cart, instructions, ETA, and room folio charges
+- [x] Printable room QR cards and guest menu link sharing
+- [x] Automatic kitchen thermal printing through a configurable IP print bridge
+- [x] Failed-print queue with automatic and manual retry
 
 ### Inventory and purchasing
 
@@ -181,5 +206,8 @@ The event bus in `src/mock/eventBus.ts` emits `stock.level.changed`, `low_stock.
 - Remote Unsplash images are used for menu item photography. The UI remains usable when images are unavailable.
 - All financial values use Nigerian Naira (`NGN`, `₦`) across dashboards, POS, inventory, billing, reports, events, CRM, and audit activity.
 - The mock session is stored under `hayata-hms-session` in local storage.
+- Printer settings and queued tickets are stored under `hayata-hms-printer`.
 - Edited RBAC permissions are stored under `hayata-hms-rbac`; clearing that key restores the default role matrix.
+- In-room QR codes resolve to `/room/:roomNumber/menu` and identify only the room. The printed code does not change at checkout; it activates again when the next guest checks into that room.
+- Guest QR orders are mirrored to browser storage so kitchen displays in other tabs of the same browser receive them. A deployed backend would be required for orders from a guest’s own phone on a different device.
 - No real payment, email, barcode scanner, or backend service is contacted.

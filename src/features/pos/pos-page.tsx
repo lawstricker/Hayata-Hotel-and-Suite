@@ -56,7 +56,7 @@ export function PosPage({ outlet }: { outlet: 'RESTAURANT' | 'BAR' }) {
   function changeQuantity(id: string, delta: number) { setCart((current) => current.flatMap((line) => line.id === id ? (line.quantity + delta <= 0 ? [] : [{ ...line, quantity: line.quantity + delta }]) : [line])) }
   function checkout() {
     if (!cart.length) return
-    const order: Order = { id: `order-${Date.now()}`, orderNumber: `${outlet === 'BAR' ? 'B' : 'R'}-${Math.floor(2000 + Math.random() * 7000)}`, outlet, tableId: selectedTable?.id, tableName: selectedTable?.name, type: orderType, status: 'New', items: cart, server: 'Elena Vasquez', createdAt: new Date().toISOString(), subtotal, discount, tax, tip, total, paymentStatus: 'Paid' }
+    const order: Order = { id: `order-${Date.now()}`, orderNumber: `${outlet === 'BAR' ? 'B' : 'R'}-${Math.floor(2000 + Math.random() * 7000)}`, outlet, tableId: selectedTable?.id, tableName: selectedTable?.name, type: orderType, status: 'New', items: cart, server: 'Elena Vasquez', createdAt: new Date().toISOString(), subtotal, discount, tax, tip, total, paymentStatus: 'Paid', source: 'POS' }
     addOrder(order)
     setCart([])
     setDiscount(0)

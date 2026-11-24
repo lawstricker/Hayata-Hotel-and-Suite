@@ -21,6 +21,8 @@ const InventoryStockTakePage = lazy(() => import('@/features/inventory/inventory
 const ReservationsPage = lazy(() => import('@/features/reservations/reservations-page').then((module) => ({ default: module.ReservationsPage })))
 const FrontDeskPage = lazy(() => import('@/features/operations/hotel-operations-pages').then((module) => ({ default: module.FrontDeskPage })))
 const RoomsPage = lazy(() => import('@/features/operations/hotel-operations-pages').then((module) => ({ default: module.RoomsPage })))
+const RoomMenuQrPage = lazy(() => import('@/features/operations/room-menu-qr-page').then((module) => ({ default: module.RoomMenuQrPage })))
+const RoomMenuPage = lazy(() => import('@/features/guest/room-menu-page').then((module) => ({ default: module.RoomMenuPage })))
 const HousekeepingPage = lazy(() => import('@/features/operations/hotel-operations-pages').then((module) => ({ default: module.HousekeepingPage })))
 const MaintenancePage = lazy(() => import('@/features/operations/hotel-operations-pages').then((module) => ({ default: module.MaintenancePage })))
 const GuestsPage = lazy(() => import('@/features/guests/guests-page').then((module) => ({ default: module.GuestsPage })))
@@ -57,12 +59,14 @@ export function AppRoutes() {
         <Route path="/login" element={<LoginPage />} />
         <Route path="/forgot-password" element={<ForgotPasswordPage />} />
         <Route path="/reset-password" element={<ResetPasswordPage />} />
+        <Route path="/room/:roomNumber/menu" element={<RoomMenuPage />} />
         <Route element={<RequireAuth />}>
           <Route element={<AppShell />}>
             <Route index element={<Guarded permission="dashboard.view"><DashboardPage /></Guarded>} />
             <Route path="reservations" element={<Guarded permission="reservation.view"><ReservationsPage /></Guarded>} />
             <Route path="front-desk" element={<Guarded permission="reservation.checkin"><FrontDeskPage /></Guarded>} />
             <Route path="rooms" element={<Guarded permission="room.view"><RoomsPage /></Guarded>} />
+            <Route path="rooms/qr-menu" element={<Guarded permission="room.view"><RoomMenuQrPage /></Guarded>} />
             <Route path="housekeeping" element={<Guarded permission="housekeeping.view"><HousekeepingPage /></Guarded>} />
             <Route path="maintenance" element={<Guarded permission="maintenance.view"><MaintenancePage /></Guarded>} />
             <Route path="guests" element={<Guarded permission="guest.view"><GuestsPage /></Guarded>} />

@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import { eventBus } from '@/mock/eventBus'
+import { readLiveOrders, subscribeToLiveOrders, updateLiveOrderStatus, upsertLiveOrder } from '@/lib/order-sync'
 import {
   inventoryItems as seedInventory,
   orders as seedOrders,
@@ -35,6 +36,7 @@ interface HotelState {
   updateReservationStatus: (reservationId: string, status: Reservation['status'], roomNumber?: string) => void
   addOrder: (order: Order) => void
   updateOrderStatus: (orderId: string, status: Order['status']) => void
+  syncLiveOrders: () => void
   addPurchaseOrder: (purchaseOrder: PurchaseOrder) => void
   updatePurchaseOrderStatus: (purchaseOrderId: string, status: PurchaseOrder['status']) => void
   addInventoryItem: (item: InventoryItem) => void
@@ -44,7 +46,7 @@ export const useHotelStore = create<HotelState>((set, get) => ({
   inventory: seedInventory,
   movements: seedMovements,
   alerts: seedAlerts,
-  orders: seedOrders,
+  orders: [...readLiveOrders(), ...seedOrders],
   reservations: seedReservations,
   rooms: seedRooms,
   purchaseOrders: seedPurchaseOrders,
@@ -107,14 +109,23 @@ export const useHotelStore = create<HotelState>((set, get) => ({
     if (status === 'Checked in' && roomNumber) eventBus.emit({ type: 'checkin.created', payload: { reservationId, guestName: get().reservations.find((reservation) => reservation.id === reservationId)?.guestName ?? 'Guest', roomNumber } })
   },
   addOrder: (order) => {
-    set((state) => ({ orders: [order, ...state.orders] }))
+    upsertLiveOrder(order)
+    set((state) => ({ orders: [order, ...state.orders.filter((candidate) => candidate.id !== order.id)] }))
     eventBus.emit({ type: 'order.created', payload: { orderId: order.id, orderNumber: order.orderNumber, outlet: order.outlet } })
   },
   updateOrderStatus: (orderId, status) => {
+    updateLiveOrderStatus(orderId, status)
     set((state) => ({ orders: state.orders.map((order) => order.id === orderId ? { ...order, status } : order) }))
     eventBus.emit({ type: 'order.status.changed', payload: { orderId, status } })
   },
+  syncLiveOrders: () => set((state) => {
+    const stored = readLiveOrders()
+    const storedIds = new Set(stored.map((order) => order.id))
+    return { orders: [...stored, ...state.orders.filter((order) => !storedIds.has(order.id))] }
+  }),
   addPurchaseOrder: (purchaseOrder) => set((state) => ({ purchaseOrders: [purchaseOrder, ...state.purchaseOrders] })),
   updatePurchaseOrderStatus: (purchaseOrderId, status) => set((state) => ({ purchaseOrders: state.purchaseOrders.map((purchaseOrder) => purchaseOrder.id === purchaseOrderId ? { ...purchaseOrder, status } : purchaseOrder) })),
   addInventoryItem: (item) => set((state) => ({ inventory: [item, ...state.inventory] })),
 }))
+
+subscribeToLiveOrders(() => useHotelStore.getState().syncLiveOrders())

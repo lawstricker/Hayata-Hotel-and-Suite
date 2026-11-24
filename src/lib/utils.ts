@@ -36,6 +36,21 @@ export function initials(name: string) {
     .toUpperCase()
 }
 
+export async function copyToClipboard(value: string) {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(value)
+    return
+  }
+  const textarea = document.createElement('textarea')
+  textarea.value = value
+  textarea.style.position = 'fixed'
+  textarea.style.opacity = '0'
+  document.body.appendChild(textarea)
+  textarea.select()
+  document.execCommand('copy')
+  textarea.remove()
+}
+
 export function downloadCsv(filename: string, rows: Record<string, unknown>[]) {
   if (!rows.length) return
   const headers = Object.keys(rows[0])

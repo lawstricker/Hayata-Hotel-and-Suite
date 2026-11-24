@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { NavLink, Outlet, useLocation } from 'react-router-dom'
 import { cn } from '@/lib/utils'
 import { useLiveSimulation } from '@/hooks/useLiveSimulation'
+import { usePrinterQueue } from '@/hooks/usePrinterQueue'
 import { useAuthStore } from '@/store/authStore'
 import { useRbacStore } from '@/store/rbacStore'
 import { CommandPalette } from './command-palette'
@@ -20,6 +21,7 @@ export function AppShell() {
   const rolePermissions = permissionsByRole[role] ?? []
   const location = useLocation()
   useLiveSimulation(true)
+  usePrinterQueue()
 
   return (
     <div className="min-h-screen bg-background">

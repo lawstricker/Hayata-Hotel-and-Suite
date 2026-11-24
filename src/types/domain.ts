@@ -197,6 +197,8 @@ export interface Order {
   tip: number
   total: number
   paymentStatus: 'Unpaid' | 'Paid' | 'Refunded' | 'Partially paid'
+  source?: 'POS' | 'ROOM_SERVICE'
+  instructions?: string
 }
 
 export type Outlet = 'STORE' | 'RESTAURANT' | 'BAR' | 'HOUSEKEEPING'
