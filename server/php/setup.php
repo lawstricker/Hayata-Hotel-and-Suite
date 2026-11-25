@@ -158,7 +158,7 @@ CREATE TABLE menu_items (
   price DECIMAL(12,2) NOT NULL,
   cost DECIMAL(12,2) NOT NULL,
   available TINYINT(1) NOT NULL DEFAULT 1,
-  image TEXT NOT NULL,
+  image MEDIUMTEXT NOT NULL,
   description TEXT NOT NULL,
   station VARCHAR(60) NOT NULL,
   age_restricted TINYINT(1) NOT NULL DEFAULT 0,
@@ -190,7 +190,8 @@ CREATE TABLE orders (
   total DECIMAL(12,2) NOT NULL,
   payment_status VARCHAR(30) NOT NULL,
   source VARCHAR(30) NOT NULL DEFAULT 'POS',
-  instructions TEXT
+  instructions TEXT,
+  payment_reference VARCHAR(60) NULL
 ) ENGINE=InnoDB;
 CREATE TABLE order_items (
   id VARCHAR(80) PRIMARY KEY,
@@ -346,7 +347,10 @@ CREATE TABLE payments (
   method VARCHAR(40) NOT NULL,
   status VARCHAR(30) NOT NULL,
   reference VARCHAR(60) NOT NULL,
-  created_at DATETIME NOT NULL
+  created_at DATETIME NOT NULL,
+  order_id VARCHAR(60) NULL,
+  room_number VARCHAR(20) NULL,
+  email VARCHAR(190) NULL
 ) ENGINE=InnoDB;
 CREATE TABLE campaigns (
   id VARCHAR(40) PRIMARY KEY,

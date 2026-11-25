@@ -59,9 +59,20 @@ export function recordTransaction(result: PaymentResult, request: PaymentRequest
   }
   usePaymentGatewayStore.getState().addTransaction(transaction)
   logActivity({
-    action: result.ok ? 'Payment approved' : 'Payment declined',
+    action: result.ok ? 'Payment approved' : (result.status === 'reversed' ? 'Payment reversed' : 'Payment declined'),
     module: 'Payments',
     detail: `${result.reference} · ${request.description} · ${request.amount}`,
   })
   return transaction
+}
+
+/**
+ * Reverses an approved payment when the order it was taken for cannot be created.
+ * The guest keeps their basket, but they are never charged twice for one order.
+ */
+export function reversePayment(result: PaymentResult, request: PaymentRequest, reason: string) {
+  return recordTransaction(
+    { ...result, ok: false, status: 'reversed', message: reason },
+    request,
+  )
 }

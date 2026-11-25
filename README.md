@@ -9,8 +9,8 @@ A polished, production-style frontend for a complete hotel operations platform. 
 - **Role-aware application shell** with ten demo roles, route guards, hidden navigation, contextual permissions, and a 403 page.
 - **Real-time inventory engine** with a fake WebSocket event bus, live stock movements, low-stock crossings, animated notifications, alerts, ledger, adjustments, transfers, requisitions, purchase orders, suppliers, and stock takes.
 - **Complete hotel operations** including reservation calendar/list, check-in/out, room rack, availability grid, housekeeping drag-and-drop board, maintenance tickets, guest 360° profiles, CRM campaigns, NPS, folios, invoices, and payments.
-- **Restaurant and bar POS** with category browsing, modifiers, table/order type, discounts, tips, split bills, age verification, checkout, KDS workflow, menu management, tabs, and room transfers.
-- **In-room QR dining** with one unique menu code per checked-in stay, printable door cards, a public guest ordering flow, room-service tickets in the kitchen, and folio-based charges.
+- **Restaurant and bar POS** with category browsing, modifiers, table/order type, discounts, tips, split bills, age verification, checkout, KDS workflow, menu management with images, tabs, and room transfers.
+- **In-room QR dining** with one unique menu code per checked-in stay, printable door cards, a public guest ordering flow, payment before the kitchen accepts the ticket, and room-service tickets in the kitchen.
 - **Enterprise design system** built with Tailwind CSS 4 and Radix-based shadcn-style primitives, including light/dark themes, persistent sidebar, command palette, notifications, skeletons, toasts, responsive mobile navigation, and accessible focus states.
 - **Subtle motion** with Framer Motion for route transitions, KPI updates, POS interactions, and live feedback.
 - **Finance & accounting workspace** at `/staff/finance` with an accounting dashboard, hierarchical chart of accounts, invoice creation, receivable aging, partial payments, PDF invoice generation and decimal-safe money helpers (`docs/finance/README.md`).
@@ -118,11 +118,24 @@ The API provides:
 
 - `POST /auth/login`, `GET /auth/me`, `GET /bootstrap`
 - Public room types, availability, quote, booking create/pay/lookup/cancel, enquiries and newsletter
+- `GET /public/menu` for the guest-facing menu, `POST /public/room-orders/quote` and `POST /public/room-orders` for paid in-room dining orders
 - Generic CRUD for all seeded domain tables
 - Reservation, order and inventory status transitions
 - Bearer-token authentication with role and permission checks
 
 All demo users are seeded into MySQL with the password `demo123`. Public bookings are written to MySQL and mirrored into the staff store so they appear immediately in Reservations and Front Desk.
+
+### Restaurant menu management
+
+`Food & beverage → Restaurant menu` manages the live `menu_items` table.
+
+- The list is loaded from `GET /resource/menu-items`; when the API is unavailable the screen falls back to the bundled menu and says so.
+- **Add item** requires a name and a picture. The picture can be a pasted image link or an uploaded file, which is resized in the browser and stored as a data URL. There is a live preview.
+- **Edit** opens the item in the same dialog and saves the name, picture, category, station, price, food cost, prep time, description and availability.
+- **Delete** asks for confirmation and then removes the item for real.
+- Availability is toggled straight from the table.
+- Writes need the `restaurant.menu` permission, so restaurant managers and administrators can edit the menu while other roles only read it.
+- The POS screens and the in-room QR menu read the same records, so a new dish or a deleted dish appears everywhere at once.
 
 ### Payment gateway and activity logs
 
@@ -213,8 +226,9 @@ src/
 - [x] Age verification for restricted products
 - [x] Live kitchen/bar display workflow
 - [x] Menu, table, order, and bar-tab management
+- [x] Restaurant menu CRUD stored on the server: every item carries a name and a picture (pasted link or uploaded photo), and each row has working Edit and Delete actions
 - [x] One permanent QR menu code per room, reusable by every guest
-- [x] Guest-facing kitchen ordering with cart, instructions, ETA, and room folio charges
+- [x] Guest-facing kitchen ordering with cart, instructions, ETA, and payment before the kitchen accepts the ticket
 - [x] Printable room QR cards and guest menu link sharing
 - [x] Automatic kitchen thermal printing through a configurable IP print bridge
 - [x] Failed-print queue with automatic and manual retry
@@ -260,6 +274,9 @@ The event bus in `src/mock/eventBus.ts` emits `stock.level.changed`, `low_stock.
 - Payment settings/transactions use `hayata-hms-payment`; activity history uses `hayata-hms-activity`.
 - Edited RBAC permissions are stored under `hayata-hms-rbac`; clearing that key restores the default role matrix.
 - In-room QR codes resolve to `/room/:roomNumber/menu` and identify only the room. The printed code does not change at checkout; it activates again when the next guest checks into that room.
-- Guest QR orders are mirrored to browser storage so kitchen displays in other tabs of the same browser receive them. A deployed backend would be required for orders from a guest’s own phone on a different device.
+- Guest QR orders are paid before they reach the kitchen. The basket is priced by the server (`POST /public/room-orders/quote`), the guest pays through the gateway, and `POST /public/room-orders` creates the order, its lines and the payment record in one transaction. The server rejects an order that has no payment reference or an amount below the order total, so an unpaid basket never becomes a kitchen ticket. If the server refuses an order after the payment was approved, the payment is reversed.
+- Guest QR orders are mirrored to browser storage so kitchen displays in other tabs of the same browser receive them. Orders placed from a guest's own phone are stored by the PHP API in `orders`, `order_items` and `payments`.
+- The restaurant menu is stored in the `menu_items` table. Uploaded item photos are kept as data URLs, so `menu_items.image` is a `MEDIUMTEXT` column (widened by migration `002_menu_item_image_mediumtext`).
+- Database schema changes are applied with `server/php/migrate.php`, which runs the files in `server/php/migrations/` and records them in `schema_migrations`. Use it instead of `setup.php` on a live database so no data is lost.
 - Online bookings are mirrored under `hayata-hms-live-reservations` so they survive refreshes and appear in staff Reservations and Front Desk.
 - No real payment, email, barcode scanner, or backend service is contacted.

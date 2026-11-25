@@ -4,6 +4,7 @@ import { QRCodeCanvas } from 'qrcode.react'
 import { Link } from 'react-router-dom'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
+import { Badge } from '@/components/ui/badge'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { EmptyState } from '@/components/common/empty-state'
@@ -283,6 +284,7 @@ export function RoomMenuQrPage() {
                     <p className="font-mono text-xs font-bold">{order.orderNumber} · Room {order.roomNumber}</p>
                     <p className="truncate text-[11px] text-muted-foreground">{order.guestName} · {(order.items ?? []).reduce((sum, line) => sum + line.quantity, 0)} items · {formatCurrency(order.total)}</p>
                   </div>
+                  {order.paymentStatus === 'Paid' && <Badge variant="success">Paid</Badge>}
                   <StatusPill status={order.status} />
                   <Button size="sm" variant="outline" disabled={order.status !== 'New'} onClick={() => { updateOrderStatus(order.id, 'Preparing'); toast.success(`${order.orderNumber} sent to preparation`) }}>
                     <Check /> {order.status === 'New' ? 'Start preparing' : order.status}

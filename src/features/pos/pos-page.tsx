@@ -1,6 +1,6 @@
 import { motion } from 'framer-motion'
 import { Banknote, CreditCard, ExternalLink, Minus, Plus, ReceiptText, Search, ShoppingBag, Split, Trash2, UserCheck, UserRound, Wine } from 'lucide-react'
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { toast } from 'sonner'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -11,8 +11,9 @@ import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { roleLabels } from '@/lib/permission-data'
 import { processPayment, recordTransaction } from '@/lib/payment-gateway'
 import { cn, formatCurrency } from '@/lib/utils'
-import { demoUsers, menuItems, tables } from '@/mock/data'
+import { demoUsers, tables } from '@/mock/data'
 import { useHotelStore } from '@/store/hotelStore'
+import { useMenuStore } from '@/store/menuStore'
 import { eligibleStaffFor, sessionTotals, usePosDisplayStore, type PosOutlet } from '@/store/posDisplayStore'
 import { usePaymentGatewayStore } from '@/store/paymentGatewayStore'
 import { useStaffStore } from '@/store/staffStore'
@@ -49,7 +50,11 @@ export function PosPage({ outlet }: { outlet: PosOutlet }) {
   const allStaffList = useMemo(() => [...addedStaff, ...demoUsers].map((user) => staffEdits[user.id] ?? user), [addedStaff, staffEdits])
   const eligibleStaff = useMemo(() => eligibleStaffFor(outlet, allStaffList), [outlet, allStaffList])
   const rolesInSection = [...new Set(eligibleStaff.map((user) => user.role))]
-  const items = menuItems.filter((item) => item.outlet === outlet)
+  // The POS reads the same menu the restaurant manager maintains, so new items show up here.
+  const menuItems = useMenuStore((state) => state.items)
+  const loadMenu = useMenuStore((state) => state.load)
+  useEffect(() => { void loadMenu() }, [loadMenu])
+  const items = useMemo(() => menuItems.filter((item) => item.outlet === outlet), [menuItems, outlet])
   const categories = ['All', ...new Set(items.map((item) => item.category))]
   const filteredItems = items.filter((item) => (category === 'All' || item.category === category) && (!query || `${item.name} ${item.description}`.toLowerCase().includes(query.toLowerCase())))
   const { subtotal, tax, total } = useMemo(() => sessionTotals(session), [session])

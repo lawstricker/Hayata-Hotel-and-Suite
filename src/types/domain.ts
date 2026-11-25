@@ -215,6 +215,8 @@ export interface Order {
   tip: number
   total: number
   paymentStatus: 'Unpaid' | 'Paid' | 'Refunded' | 'Partially paid'
+  /** Gateway reference for orders that were paid before they were sent to the kitchen. */
+  paymentReference?: string
   source?: 'POS' | 'ROOM_SERVICE'
   instructions?: string
 }

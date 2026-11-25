@@ -37,7 +37,7 @@ interface HotelState {
   snoozeAlert: (alertId: string) => void
   addReservation: (reservation: Reservation) => void
   updateReservationStatus: (reservationId: string, status: Reservation['status'], roomNumber?: string) => void
-  addOrder: (order: Order) => void
+  addOrder: (order: Order, options?: { persist?: boolean }) => void
   updateOrderStatus: (orderId: string, status: Order['status']) => void
   syncLiveOrders: () => void
   syncLiveReservations: () => void
@@ -129,8 +129,10 @@ export const useHotelStore = create<HotelState>((set, get) => ({
     eventBus.emit({ type: 'reservation.updated', payload: { reservationId, status } })
     if (status === 'Checked in' && roomNumber) eventBus.emit({ type: 'checkin.created', payload: { reservationId, guestName: get().reservations.find((reservation) => reservation.id === reservationId)?.guestName ?? 'Guest', roomNumber } })
   },
-  addOrder: (order) => {
-    void syncOrderCreate(order)
+  addOrder: (order, options) => {
+    // `persist: false` is used when the server has already stored the order
+    // (for example a paid in-room dining order created through the public API).
+    if (options?.persist !== false) void syncOrderCreate(order)
     logActivity({ action: 'Order created', module: order.outlet === 'BAR' ? 'Bar' : 'Restaurant', detail: `${order.orderNumber} · ${order.type} · ${order.total}` })
     upsertLiveOrder(order)
     set((state) => ({ orders: [order, ...state.orders.filter((candidate) => candidate.id !== order.id)] }))

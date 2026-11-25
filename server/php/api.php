@@ -91,6 +91,29 @@ function h_attach_order_items(PDO $pdo, array $orders): array {
     return $orders;
 }
 
+/**
+ * Normalises a menu item so the JSON contract matches the TypeScript MenuItem type.
+ *
+ * MySQL returns DECIMAL columns as strings, which would break price arithmetic and
+ * make the client show "18.00" instead of 18.
+ */
+function h_normalize_menu_item(array $item): array {
+    foreach (['price', 'cost'] as $field) {
+        $item[$field] = h_num($item[$field] ?? 0);
+    }
+    $item['prepMinutes'] = (int) h_num($item['prepMinutes'] ?? 0);
+    if (array_key_exists('available', $item)) $item['available'] = (bool) $item['available'];
+    if (array_key_exists('ageRestricted', $item)) $item['ageRestricted'] = (bool) $item['ageRestricted'];
+    if (empty($item['image'])) $item['image'] = '';
+    if (empty($item['description'])) $item['description'] = '';
+    return $item;
+}
+
+/** Normalises a list of menu items. */
+function h_normalize_menu_items(array $items): array {
+    return array_map('h_normalize_menu_item', $items);
+}
+
 function h_table_columns(PDO $pdo, string $table): array {
     $statement = $pdo->prepare('SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = :table');
     $statement->execute(['table' => $table]);
@@ -426,6 +449,184 @@ if (preg_match('#^/public/bookings/([^/]+)/cancel$#', $route, $matches) && $meth
     hayata_json(h_public_booking($pdo, $statement->fetch()));
 }
 
+/**
+ * Finds the active checked-in stay for a room.
+ *
+ * In-room dining codes identify the room only, so the server confirms that the
+ * room currently has a checked-in guest before it accepts any order.
+ */
+function h_room_stay(PDO $pdo, string $roomNumber): array {
+    $statement = $pdo->prepare(
+        "SELECT r.id, r.guest_name, r.room_number, g.email
+         FROM reservations r
+         LEFT JOIN guests g ON g.id = r.guest_id
+         WHERE r.status = 'Checked in' AND r.room_number = :room
+         ORDER BY r.check_in DESC LIMIT 1"
+    );
+    $statement->execute(['room' => $roomNumber]);
+    $stay = $statement->fetch();
+    if (!$stay) h_error('This in-room dining code is not linked to an active stay.', 'ROOM_UNAVAILABLE', 403);
+    return $stay;
+}
+
+/**
+ * Re-prices a guest basket from the `menu_items` table.
+ *
+ * The browser never dictates prices: every line is priced again on the server so a
+ * tampered basket cannot change what the guest is charged.
+ */
+function h_room_order_lines(PDO $pdo, array $requested): array {
+    $lines = [];
+    foreach ($requested as $line) {
+        if (!is_array($line)) continue;
+        $menuItemId = trim((string) ($line['menuItemId'] ?? ''));
+        if ($menuItemId === '') continue;
+        $quantity = (int) ($line['quantity'] ?? 0);
+        if ($quantity < 1 || $quantity > 20) h_error('That quantity is not valid.', 'VALIDATION');
+        $statement = $pdo->prepare('SELECT id, name, price, station, available FROM menu_items WHERE id = :id LIMIT 1');
+        $statement->execute(['id' => $menuItemId]);
+        $menu = $statement->fetch();
+        if (!$menu) h_error('One of the selected dishes is no longer on the menu.', 'ITEM_UNAVAILABLE', 409);
+        if (!$menu['available']) h_error(sprintf('%s is currently unavailable.', $menu['name']), 'ITEM_UNAVAILABLE', 409);
+        $modifiers = [];
+        foreach ((array) ($line['modifiers'] ?? []) as $modifier) {
+            $modifier = trim((string) $modifier);
+            if ($modifier !== '') $modifiers[] = $modifier;
+        }
+        $lines[] = [
+            'menuItemId' => $menu['id'],
+            'name' => $menu['name'],
+            'quantity' => $quantity,
+            'price' => round((float) $menu['price'], 2),
+            'modifiers' => $modifiers,
+            'station' => $menu['station'],
+        ];
+    }
+    if (!$lines) h_error('Your basket is empty.', 'VALIDATION');
+    return $lines;
+}
+
+/** Builds the authoritative quote for an in-room dining order. */
+function h_room_order_quote(PDO $pdo, string $roomNumber, array $requested): array {
+    $stay = h_room_stay($pdo, $roomNumber);
+    $lines = h_room_order_lines($pdo, $requested);
+    $subtotal = 0.0;
+    foreach ($lines as $line) $subtotal += $line['price'] * $line['quantity'];
+    $subtotal = round($subtotal, 2);
+    $tax = round($subtotal * 0.08, 2);
+    return [
+        'roomNumber' => (string) $stay['room_number'],
+        'guestName' => (string) $stay['guest_name'],
+        'email' => (string) ($stay['email'] ?? ''),
+        'items' => $lines,
+        'subtotal' => $subtotal,
+        'tax' => $tax,
+        'total' => round($subtotal + $tax, 2),
+    ];
+}
+
+/** Generates a unique order number for a room-service order. */
+function h_room_order_number(PDO $pdo): string {
+    do {
+        $candidate = 'RS-' . random_int(2000, 9999);
+        $statement = $pdo->prepare('SELECT COUNT(*) FROM orders WHERE order_number = :number');
+        $statement->execute(['number' => $candidate]);
+    } while ((int) $statement->fetchColumn() > 0);
+    return $candidate;
+}
+
+// Public menu for the in-room QR dining page. Only available items are exposed.
+if ($route === '/public/menu' && $method === 'GET') {
+    $statement = $pdo->query(
+        'SELECT id, name, category, outlet, price, cost, available, image, description, station, age_restricted, prep_minutes
+         FROM menu_items WHERE available = 1 ORDER BY category, name'
+    );
+    hayata_json(h_normalize_menu_items(h_decode_rows($statement->fetchAll())));
+}
+
+// Guest in-room dining: quote the basket before the guest pays.
+if ($route === '/public/room-orders/quote' && $method === 'POST') {
+    $roomNumber = strtoupper(trim((string) ($body['roomNumber'] ?? '')));
+    if ($roomNumber === '') h_error('Room number is required.', 'VALIDATION');
+    hayata_json(h_room_order_quote($pdo, $roomNumber, (array) ($body['items'] ?? [])));
+}
+
+// Guest in-room dining: a paid order is the only way a ticket reaches the kitchen.
+if ($route === '/public/room-orders' && $method === 'POST') {
+    $roomNumber = strtoupper(trim((string) ($body['roomNumber'] ?? '')));
+    if ($roomNumber === '') h_error('Room number is required.', 'VALIDATION');
+    $quote = h_room_order_quote($pdo, $roomNumber, (array) ($body['items'] ?? []));
+
+    $payment = (array) ($body['payment'] ?? []);
+    $reference = trim((string) ($payment['reference'] ?? ''));
+    if ($reference === '') h_error('Payment is required before the order reaches the kitchen.', 'PAYMENT_REQUIRED', 402);
+    $paidAmount = round((float) ($payment['amount'] ?? 0), 2);
+    if ($paidAmount + 0.01 < $quote['total']) h_error('The payment does not cover the order total.', 'PAYMENT_INCOMPLETE', 402);
+
+    $orderId = 'room-' . strtolower(bin2hex(random_bytes(8)));
+    $paymentId = 'pay-' . strtolower(bin2hex(random_bytes(8)));
+    $email = trim((string) ($body['email'] ?? ''));
+    $instructions = trim((string) ($body['instructions'] ?? ''));
+
+    try {
+        $pdo->beginTransaction();
+        h_insert($pdo, 'orders', [
+            'id' => $orderId,
+            'order_number' => h_room_order_number($pdo),
+            'outlet' => 'RESTAURANT',
+            'type' => 'Room service',
+            'status' => 'New',
+            'guest_name' => $quote['guestName'],
+            'room_number' => $quote['roomNumber'],
+            'server' => 'In-room dining',
+            'created_at' => date('Y-m-d H:i:s'),
+            'subtotal' => $quote['subtotal'],
+            'discount' => 0,
+            'tax' => $quote['tax'],
+            'tip' => 0,
+            'total' => $quote['total'],
+            'payment_status' => 'Paid',
+            'source' => 'ROOM_SERVICE',
+            'instructions' => $instructions !== '' ? $instructions : null,
+            'payment_reference' => $reference,
+        ]);
+        foreach ($quote['items'] as $index => $line) {
+            h_insert($pdo, 'order_items', [
+                'id' => $orderId . '-i' . ($index + 1),
+                'order_id' => $orderId,
+                'menu_item_id' => $line['menuItemId'],
+                'name' => $line['name'],
+                'quantity' => $line['quantity'],
+                'price' => $line['price'],
+                'modifiers' => $line['modifiers'],
+                'station' => $line['station'],
+            ]);
+        }
+        h_insert($pdo, 'payments', [
+            'id' => $paymentId,
+            'payment_number' => 'PAY-' . strtoupper(bin2hex(random_bytes(4))),
+            'guest_name' => $quote['guestName'],
+            'amount' => $paidAmount,
+            'method' => (string) ($payment['method'] ?? 'Card'),
+            'status' => 'Paid',
+            'reference' => $reference,
+            'created_at' => date('Y-m-d H:i:s'),
+            'order_id' => $orderId,
+            'room_number' => $quote['roomNumber'],
+            'email' => $email !== '' ? $email : null,
+        ]);
+        $pdo->commit();
+    } catch (Throwable $exception) {
+        if ($pdo->inTransaction()) $pdo->rollBack();
+        h_error('We could not complete your order. Please try again.', 'ORDER_FAILED', 500);
+    }
+
+    $statement = $pdo->prepare('SELECT * FROM orders WHERE id = :id');
+    $statement->execute(['id' => $orderId]);
+    $order = h_attach_order_items($pdo, [h_decode_row($statement->fetch())])[0];
+    hayata_json(['order' => $order, 'paymentReference' => $reference], 201);
+}
+
 if ($route === '/public/enquiries' && $method === 'POST') {
     if (empty($body['name']) || empty($body['email']) || empty($body['message'])) h_error('Please complete all required fields.');
     h_insert($pdo, 'public_enquiries', ['name' => $body['name'], 'email' => $body['email'], 'subject' => $body['subject'] ?? 'General enquiry', 'message' => $body['message']]);
@@ -508,6 +709,7 @@ if ($route === '/bootstrap' && $method === 'GET') {
     }
     // Orders store their lines in `order_items`; join them in so the client receives complete orders.
     $output['orders'] = h_attach_order_items($pdo, $output['orders'] ?? []);
+    $output['menuItems'] = h_normalize_menu_items($output['menuItems'] ?? []);
     hayata_json($output);
 }
 
@@ -533,6 +735,7 @@ if (preg_match('#^/resource/([a-z-]+)(?:/([^/]+))?$#', $route, $matches)) {
         $limit = min(500, max(1, (int) ($query['limit'] ?? 200)));
         $rows = h_decode_rows($pdo->query("SELECT * FROM `$table` ORDER BY 1 LIMIT $limit")->fetchAll());
         if ($table === 'orders') $rows = h_attach_order_items($pdo, $rows);
+        if ($table === 'menu_items') $rows = h_normalize_menu_items($rows);
         hayata_json($rows);
     }
     if ($method === 'GET' && $id) {
@@ -542,15 +745,20 @@ if (preg_match('#^/resource/([a-z-]+)(?:/([^/]+))?$#', $route, $matches)) {
         if (!$row) h_error('Not found.', 'NOT_FOUND', 404);
         $decoded = h_decode_row($row);
         if ($table === 'orders') $decoded = h_attach_order_items($pdo, [$decoded])[0];
+        if ($table === 'menu_items') $decoded = h_normalize_menu_item($decoded);
         hayata_json($decoded);
     }
-    // Orders and their lines are created by F&B staff (waiters, bartenders, managers),
-    // not only by administrators, so they get outlet-scoped permissions instead.
-    $orderPermissions = ['orders' => 'restaurant.orders', 'order_items' => 'restaurant.orders'];
+    // Orders, their lines and the menu are edited by F&B staff (waiters, bartenders,
+    // managers), not only by administrators, so they get outlet-scoped permissions instead.
+    $resourcePermissions = [
+        'orders' => 'restaurant.orders',
+        'order_items' => 'restaurant.orders',
+        'menu_items' => 'restaurant.menu',
+    ];
 
     if ($method === 'POST') {
-        if (isset($orderPermissions[$table])) {
-            hayata_require_permission($pdo, $orderPermissions[$table]);
+        if (isset($resourcePermissions[$table])) {
+            hayata_require_permission($pdo, $resourcePermissions[$table]);
         } else {
             hayata_require_permission($pdo, 'settings.manage');
         }
@@ -580,11 +788,13 @@ if (preg_match('#^/resource/([a-z-]+)(?:/([^/]+))?$#', $route, $matches)) {
         }
         $statement = $pdo->prepare("SELECT * FROM `$table` WHERE id = :id");
         $statement->execute(['id' => $newId]);
-        hayata_json(h_decode_row($statement->fetch() ?: $body), 201);
+        $created = h_decode_row($statement->fetch() ?: $body);
+        if ($table === 'menu_items') $created = h_normalize_menu_item($created);
+        hayata_json($created, 201);
     }
     if ($method === 'PUT' && $id) {
-        if (isset($orderPermissions[$table])) {
-            hayata_require_permission($pdo, $orderPermissions[$table]);
+        if (isset($resourcePermissions[$table])) {
+            hayata_require_permission($pdo, $resourcePermissions[$table]);
         } else {
             hayata_require_permission($pdo, 'settings.manage');
         }
@@ -615,10 +825,16 @@ if (preg_match('#^/resource/([a-z-]+)(?:/([^/]+))?$#', $route, $matches)) {
         }
         $statement = $pdo->prepare("SELECT * FROM `$table` WHERE id = :id");
         $statement->execute(['id' => $id]);
-        hayata_json(h_decode_row($statement->fetch() ?: $body));
+        $updated = h_decode_row($statement->fetch() ?: $body);
+        if ($table === 'menu_items') $updated = h_normalize_menu_item($updated);
+        hayata_json($updated);
     }
     if ($method === 'DELETE' && $id) {
-        hayata_require_permission($pdo, 'settings.manage');
+        if (isset($resourcePermissions[$table])) {
+            hayata_require_permission($pdo, $resourcePermissions[$table]);
+        } else {
+            hayata_require_permission($pdo, 'settings.manage');
+        }
         $statement = $pdo->prepare("DELETE FROM `$table` WHERE id = :id");
         $statement->execute(['id' => $id]);
         hayata_json(['ok' => true]);

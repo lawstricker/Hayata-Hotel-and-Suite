@@ -32,7 +32,7 @@ export interface PaymentRequest {
 
 export interface PaymentResult {
   ok: boolean
-  status: 'approved' | 'declined'
+  status: 'approved' | 'declined' | 'reversed'
   reference: string
   message: string
   provider: PaymentProvider | 'demo'

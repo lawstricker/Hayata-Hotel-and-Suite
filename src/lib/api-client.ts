@@ -55,6 +55,10 @@ export function apiPut<T>(route: string, body: unknown) {
   return apiRequest<T>(route, { method: 'PUT', body: JSON.stringify(body) })
 }
 
+export function apiDelete<T>(route: string) {
+  return apiRequest<T>(route, { method: 'DELETE' })
+}
+
 export async function withFallback<T>(serverCall: () => Promise<T>, fallbackCall: () => T | Promise<T>): Promise<T> {
   if (!SERVER_ENABLED) return fallbackCall()
   try {
