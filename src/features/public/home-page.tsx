@@ -34,9 +34,11 @@ export function HomePage() {
         <div className="pointer-events-none absolute inset-0 z-[1] bg-[radial-gradient(circle_at_20%_30%,rgba(201,168,76,0.16),transparent_45%)]" />
 
         <motion.div style={reduceMotion ? undefined : { opacity: heroOpacity }} className="relative z-10 mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
-          <motion.p initial={reduceMotion ? false : { opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.8 }} className="text-[11px] font-bold uppercase tracking-[0.34em] text-champagne">
-            Metro City · A private address
-          </motion.p>
+          <Reveal delay={0.05} y={16}>
+            <p className="text-[11px] font-bold uppercase tracking-[0.34em] text-champagne">
+              Metro City · A private address
+            </p>
+          </Reveal>
           <h1 className="mt-6 max-w-5xl font-editorial text-[clamp(3.6rem,10vw,9rem)] font-medium leading-[0.86] tracking-[-0.045em] text-cream">
             <RevealText text="Stay beautifully." delay={0.15} />
           </h1>
@@ -54,9 +56,15 @@ export function HomePage() {
               </div>
             </Reveal>
           </div>
-          <motion.div initial={reduceMotion ? false : { opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 1.1 }} className="mt-16 flex items-center gap-3 text-[10px] font-bold uppercase tracking-[0.24em] text-cream/60">
-            <ArrowDownRight className="size-4 text-champagne" aria-hidden="true" /> Scroll to discover
-          </motion.div>
+          <Reveal delay={0.8} y={10}>
+            <button
+              type="button"
+              onClick={() => document.getElementById('discover')?.scrollIntoView({ behavior: reduceMotion ? 'auto' : 'smooth', block: 'start' })}
+              className="mt-16 flex items-center gap-3 text-left text-[10px] font-bold uppercase tracking-[0.24em] text-cream/60 transition-colors hover:text-cream focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-champagne"
+            >
+              <ArrowDownRight className="size-4 text-champagne" aria-hidden="true" /> Scroll to discover
+            </button>
+          </Reveal>
         </motion.div>
       </section>
 
@@ -66,7 +74,7 @@ export function HomePage() {
         </Reveal>
       </section>
 
-      <section className="border-y border-border/70 bg-cream py-16 dark:bg-cream/5">
+      <section id="discover" className="scroll-mt-24 border-y border-border/70 bg-cream py-16 dark:bg-cream/5">
         <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-center gap-x-12 gap-y-6 px-4 sm:px-6 lg:px-8">
           {promises.map((promise, index) => (
             <Reveal key={promise.label} delay={index * 0.08}>
@@ -97,7 +105,7 @@ export function HomePage() {
         <div className="relative z-10 mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
           <div className="grid gap-14 lg:grid-cols-[1fr_0.9fr] lg:items-center">
             <div>
-              <p className="text-[11px] font-bold uppercase tracking-[0.3em] text-champagne">The Hayata way</p>
+              <Reveal y={16}><p className="text-[11px] font-bold uppercase tracking-[0.3em] text-champagne">The Hayata way</p></Reveal>
               <h2 className="mt-5 font-editorial text-5xl leading-[1.02] sm:text-6xl"><RevealText text="Small details, deeply felt." /></h2>
               <GoldRule className="mt-8 w-56" />
               <Reveal delay={0.2}>

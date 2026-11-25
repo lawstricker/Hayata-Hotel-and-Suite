@@ -94,8 +94,11 @@ export const navigation: NavGroup[] = [
     ],
   },
   {
-    label: 'Finance',
+    label: 'Finance & accounting',
     items: [
+      { label: 'Finance overview', path: '/staff/finance', icon: CreditCard, permissions: ['finance:view'] },
+      { label: 'Chart of accounts', path: '/staff/finance/accounts', icon: BookOpenCheck, permissions: ['accounts:view'] },
+      { label: 'Customer invoices', path: '/staff/finance/invoices', icon: ReceiptText, permissions: ['invoice:view'] },
       { label: 'Guest folios', path: '/staff/billing/folios', icon: CreditCard, permissions: ['billing.view'] },
       { label: 'Invoices', path: '/staff/billing/invoices', icon: ReceiptText, permissions: ['billing.view'] },
       { label: 'Payments', path: '/staff/billing/payments', icon: CreditCard, permissions: ['billing.view'] },

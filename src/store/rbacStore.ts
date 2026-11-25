@@ -35,6 +35,11 @@ export const useRbacStore = create<RbacState>()(
     {
       name: 'hayata-hms-rbac',
       partialize: (state) => ({ permissions: state.permissions }),
+      // Keep defaults for roles added after a session was first persisted.
+      merge: (persisted, current) => {
+        const stored = persisted as Partial<RbacState> | undefined
+        return { ...current, ...stored, permissions: { ...current.permissions, ...(stored?.permissions ?? {}) } }
+      },
     },
   ),
 )

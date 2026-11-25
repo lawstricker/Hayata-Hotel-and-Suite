@@ -417,6 +417,8 @@ $roles = [
     ['SUPER_ADMIN', 'Super Admin'], ['HOTEL_MANAGER', 'Hotel Manager'], ['FRONT_DESK', 'Front Desk'],
     ['HOUSEKEEPING', 'Housekeeping'], ['RESTAURANT_MANAGER', 'Restaurant Manager'], ['BAR_MANAGER', 'Bar Manager'],
     ['STORE_MANAGER', 'Store Manager'], ['ACCOUNTANT', 'Accountant'], ['WAITER', 'Waiter'], ['BARTENDER', 'Bartender'],
+    ['FOOD_BEVERAGE_STAFF', 'Food & Beverage Staff'],
+    ['ADMIN', 'Finance Admin'], ['APPROVER', 'Approver'], ['AUDITOR', 'Auditor'], ['VIEWER', 'Viewer'],
 ];
 foreach ($roles as [$name, $label]) ins($pdo, 'roles', ['id' => strtolower($name), 'name' => $name, 'label' => $label]);
 
@@ -429,6 +431,12 @@ $permissionKeys = [
     'inventory.manage', 'inventory.alerts', 'inventory.po', 'inventory.transfer', 'inventory.requisition',
     'inventory.stocktake', 'supplier.manage', 'billing.view', 'billing.manage', 'report.view',
     'staff.view', 'staff.manage', 'event.view', 'event.manage', 'settings.view', 'settings.manage', 'settings.rbac',
+    'finance:view', 'accounts:view', 'accounts:create', 'accounts:edit', 'accounts:delete',
+    'journal:view', 'journal:create', 'journal:post', 'journal:reverse',
+    'invoice:view', 'invoice:create', 'invoice:approve', 'bill:view', 'bill:create', 'bill:approve',
+    'expense:view', 'expense:approve', 'payment:view', 'payment:create', 'payment:reconcile',
+    'bank:view', 'bank:reconcile', 'budget:view', 'budget:manage', 'tax:view', 'tax:manage',
+    'report:finance', 'audit:view', 'settings:finance',
 ];
 foreach ($permissionKeys as $key) ins($pdo, 'permissions', ['permission_key' => $key, 'label' => ucwords(str_replace('.', ' ', $key))]);
 
@@ -446,9 +454,17 @@ grant($pdo, $permissionIds, 'HOUSEKEEPING', ['dashboard.view','room.view','house
 grant($pdo, $permissionIds, 'RESTAURANT_MANAGER', ['dashboard.view','restaurant.pos','restaurant.menu','restaurant.kds','restaurant.orders','restaurant.inventory','inventory.view','inventory.manage','inventory.alerts','inventory.po','inventory.transfer','inventory.requisition','inventory.stocktake','staff.view','report.view']);
 grant($pdo, $permissionIds, 'BAR_MANAGER', ['dashboard.view','bar.pos','bar.tabs','bar.kds','bar.inventory','inventory.view','inventory.manage','inventory.alerts','inventory.po','inventory.transfer','inventory.requisition','inventory.stocktake','staff.view','report.view']);
 grant($pdo, $permissionIds, 'STORE_MANAGER', ['dashboard.view','inventory.view','inventory.manage','inventory.alerts','inventory.po','inventory.transfer','inventory.requisition','inventory.stocktake','supplier.manage','report.view','staff.view']);
-grant($pdo, $permissionIds, 'ACCOUNTANT', ['dashboard.view','billing.view','billing.manage','report.view','guest.view']);
+$financeViewKeys = ['finance:view','accounts:view','journal:view','invoice:view','bill:view','expense:view','payment:view','bank:view','budget:view','tax:view','report:finance','audit:view'];
+$financeWriteKeys = ['accounts:create','accounts:edit','accounts:delete','journal:create','journal:reverse','invoice:create','bill:create','payment:create','payment:reconcile','bank:reconcile','budget:manage','tax:manage','settings:finance'];
+$financeApproveKeys = ['journal:post','invoice:approve','bill:approve','expense:approve'];
+grant($pdo, $permissionIds, 'ACCOUNTANT', array_merge(['dashboard.view','billing.view','billing.manage','report.view','guest.view'], $financeViewKeys, $financeWriteKeys));
+grant($pdo, $permissionIds, 'ADMIN', $permissionKeys);
+grant($pdo, $permissionIds, 'APPROVER', array_merge(['dashboard.view'], $financeViewKeys, $financeApproveKeys, ['journal:reverse','payment:reconcile','bank:reconcile']));
+grant($pdo, $permissionIds, 'AUDITOR', array_merge(['dashboard.view'], $financeViewKeys));
+grant($pdo, $permissionIds, 'VIEWER', array_merge(['dashboard.view'], array_diff($financeViewKeys, ['audit:view'])));
 grant($pdo, $permissionIds, 'WAITER', ['dashboard.view','restaurant.pos']);
 grant($pdo, $permissionIds, 'BARTENDER', ['dashboard.view','bar.pos']);
+grant($pdo, $permissionIds, 'FOOD_BEVERAGE_STAFF', ['dashboard.view','restaurant.pos','restaurant.orders','restaurant.kds','bar.pos','bar.tabs','bar.kds']);
 
 $users = [
     ['usr-001','Elena Vasquez','elena@hayatahotel.com','SUPER_ADMIN','Executive'],
@@ -461,6 +477,11 @@ $users = [
     ['usr-008','Grace Liu','grace@hayatahotel.com','ACCOUNTANT','Finance'],
     ['usr-009','Leo Martins','leo@hayatahotel.com','WAITER','Restaurant'],
     ['usr-010','Maya Thompson','maya@hayatahotel.com','BARTENDER','Bar'],
+    ['usr-011','Ada Nwosu','ada@hayatahotel.com','FOOD_BEVERAGE_STAFF','Food & Beverage'],
+    ['usr-012','Tobias Reed','admin@hayatahotel.com','ADMIN','Finance'],
+    ['usr-013','Priya Shah','approver@hayatahotel.com','APPROVER','Finance'],
+    ['usr-014','Victor Cole','auditor@hayatahotel.com','AUDITOR','Finance'],
+    ['usr-015','Noah Bell','viewer@hayatahotel.com','VIEWER','Finance'],
 ];
 foreach ($users as [$id, $name, $email, $role, $department]) {
     ins($pdo, 'users', [

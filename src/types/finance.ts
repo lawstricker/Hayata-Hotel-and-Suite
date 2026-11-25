@@ -1,0 +1,23 @@
+/** Finance-facing names. Legacy billing types keep the plain `Invoice`/`Payment` names in domain.ts. */
+export type {
+  Account,
+  AccountStatus,
+  AccountType,
+  Attachment,
+  AuditEvent,
+  Customer,
+  Bill,
+  BillLine,
+  Expense,
+  FiscalPeriod,
+  JournalEntry,
+  JournalEntryStatus,
+  JournalLine,
+  NormalBalance,
+  TaxRate,
+  FinanceInvoice as Invoice,
+  InvoiceLine,
+  FinancePayment as Payment,
+  Role,
+  User,
+} from '@/types/domain'

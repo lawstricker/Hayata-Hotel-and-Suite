@@ -1,3 +1,4 @@
+import { financePermissionMatrix } from '@/lib/permissions'
 import type { Permission, Role } from '@/types/domain'
 
 export const roleLabels: Record<Role, string> = {
@@ -11,6 +12,11 @@ export const roleLabels: Record<Role, string> = {
   ACCOUNTANT: 'Accountant',
   WAITER: 'Waiter',
   BARTENDER: 'Bartender',
+  FOOD_BEVERAGE_STAFF: 'Food & Beverage Staff',
+  ADMIN: 'Finance Admin',
+  APPROVER: 'Approver',
+  AUDITOR: 'Auditor',
+  VIEWER: 'Viewer',
 }
 
 const allPermissions: Permission[] = [
@@ -23,6 +29,17 @@ const allPermissions: Permission[] = [
   'inventory.view', 'inventory.manage', 'inventory.alerts', 'inventory.po', 'inventory.transfer', 'inventory.requisition', 'inventory.stocktake', 'supplier.manage',
   'billing.view', 'billing.manage', 'report.view', 'staff.view', 'staff.manage', 'event.view', 'event.manage',
   'settings.view', 'settings.manage', 'settings.rbac',
+  'finance:view',
+  'accounts:view', 'accounts:create', 'accounts:edit', 'accounts:delete',
+  'journal:view', 'journal:create', 'journal:post', 'journal:reverse',
+  'invoice:view', 'invoice:create', 'invoice:approve',
+  'bill:view', 'bill:create', 'bill:approve',
+  'expense:view', 'expense:approve',
+  'payment:view', 'payment:create', 'payment:reconcile',
+  'bank:view', 'bank:reconcile',
+  'budget:view', 'budget:manage',
+  'tax:view', 'tax:manage',
+  'report:finance', 'audit:view', 'settings:finance',
 ]
 
 export const defaultPermissionMatrix: Record<Role, Permission[]> = {
@@ -47,7 +64,12 @@ export const defaultPermissionMatrix: Record<Role, Permission[]> = {
     'dashboard.view', 'inventory.view', 'inventory.manage', 'inventory.alerts', 'inventory.po', 'inventory.transfer',
     'inventory.requisition', 'inventory.stocktake', 'supplier.manage', 'report.view', 'staff.view',
   ],
-  ACCOUNTANT: ['dashboard.view', 'billing.view', 'billing.manage', 'report.view', 'guest.view'],
+  ACCOUNTANT: [...financePermissionMatrix.ACCOUNTANT, 'billing.view', 'billing.manage', 'report.view', 'guest.view'],
   WAITER: ['dashboard.view', 'restaurant.pos'],
   BARTENDER: ['dashboard.view', 'bar.pos'],
+  FOOD_BEVERAGE_STAFF: ['dashboard.view', 'restaurant.pos', 'restaurant.orders', 'restaurant.kds', 'bar.pos', 'bar.tabs', 'bar.kds'],
+  ADMIN: allPermissions,
+  APPROVER: [...financePermissionMatrix.APPROVER],
+  AUDITOR: [...financePermissionMatrix.AUDITOR],
+  VIEWER: [...financePermissionMatrix.VIEWER],
 }

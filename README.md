@@ -13,6 +13,7 @@ A polished, production-style frontend for a complete hotel operations platform. 
 - **In-room QR dining** with one unique menu code per checked-in stay, printable door cards, a public guest ordering flow, room-service tickets in the kitchen, and folio-based charges.
 - **Enterprise design system** built with Tailwind CSS 4 and Radix-based shadcn-style primitives, including light/dark themes, persistent sidebar, command palette, notifications, skeletons, toasts, responsive mobile navigation, and accessible focus states.
 - **Subtle motion** with Framer Motion for route transitions, KPI updates, POS interactions, and live feedback.
+- **Finance & accounting workspace** at `/staff/finance` with an accounting dashboard, hierarchical chart of accounts, invoice creation, receivable aging, partial payments, PDF invoice generation and decimal-safe money helpers (`docs/finance/README.md`).
 
 ## Tech stack
 

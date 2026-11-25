@@ -69,7 +69,7 @@ function metricsForRole(role: Role, revenue: number): Metric[] {
     { label: 'Pending requisitions', value: '4', changeLabel: '2 need approval', icon: ClipboardCheck, tone: 'amber' },
     { label: 'Expiring soon', value: '8', changeLabel: 'next 30 days', icon: CalendarCheck2, tone: 'slate' },
   ]
-  if (role === 'RESTAURANT_MANAGER' || role === 'BAR_MANAGER' || role === 'WAITER' || role === 'BARTENDER') return [
+  if (role === 'RESTAURANT_MANAGER' || role === 'BAR_MANAGER' || role === 'WAITER' || role === 'BARTENDER' || role === 'FOOD_BEVERAGE_STAFF') return [
     { label: 'Open orders', value: role.startsWith('BAR') || role === 'BARTENDER' ? '9' : '14', change: 8.4, changeLabel: '6 in preparation', icon: ReceiptText, tone: 'teal', live: true },
     { label: 'Sales today', value: '₦4,820', change: 14.2, changeLabel: 'vs. yesterday', icon: NigerianNaira, tone: 'blue' },
     { label: 'Covers served', value: role.startsWith('BAR') || role === 'BARTENDER' ? '186' : '248', change: 6.8, changeLabel: 'last 7 days', icon: Users, tone: 'violet' },

@@ -1,4 +1,5 @@
 import { motion, useReducedMotion } from 'framer-motion'
+import { Reveal } from '@/features/public/animations'
 import { ArrowRight, BedDouble, CalendarDays, ChevronRight, Users } from 'lucide-react'
 import { useState, type FormEvent, type ReactNode } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
@@ -15,9 +16,9 @@ export function SectionHeading({ eyebrow, title, description, center = false, as
   const Heading = as
   return (
     <div className={cn('max-w-2xl', center && 'mx-auto text-center')}>
-      <p className="text-[11px] font-bold uppercase tracking-[0.22em] text-primary">{eyebrow}</p>
-      <Heading className="mt-3 font-editorial text-3xl font-bold leading-tight sm:text-4xl">{title}</Heading>
-      {description && <p className="mt-3 text-sm leading-relaxed text-muted-foreground sm:text-base">{description}</p>}
+      <Reveal y={14}><p className="text-[11px] font-bold uppercase tracking-[0.22em] text-primary">{eyebrow}</p></Reveal>
+      <Reveal y={22} delay={0.08}><Heading className="mt-3 font-editorial text-3xl font-bold leading-tight sm:text-4xl">{title}</Heading></Reveal>
+      {description && <Reveal y={16} delay={0.16}><p className="mt-3 text-sm leading-relaxed text-muted-foreground sm:text-base">{description}</p></Reveal>}
     </div>
   )
 }

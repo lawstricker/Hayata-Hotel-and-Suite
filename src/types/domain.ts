@@ -9,6 +9,11 @@ export type Role =
   | 'ACCOUNTANT'
   | 'WAITER'
   | 'BARTENDER'
+  | 'FOOD_BEVERAGE_STAFF'
+  | 'ADMIN'
+  | 'APPROVER'
+  | 'AUDITOR'
+  | 'VIEWER'
 
 export type Permission =
   | 'dashboard.view'
@@ -25,6 +30,18 @@ export type Permission =
   | 'staff.view' | 'staff.manage'
   | 'event.view' | 'event.manage'
   | 'settings.view' | 'settings.manage' | 'settings.rbac'
+  // Finance module (colon namespace – see lib/permissions.ts)
+  | 'finance:view'
+  | 'accounts:view' | 'accounts:create' | 'accounts:edit' | 'accounts:delete'
+  | 'journal:view' | 'journal:create' | 'journal:post' | 'journal:reverse'
+  | 'invoice:view' | 'invoice:create' | 'invoice:approve'
+  | 'bill:view' | 'bill:create' | 'bill:approve'
+  | 'expense:view' | 'expense:approve'
+  | 'payment:view' | 'payment:create' | 'payment:reconcile'
+  | 'bank:view' | 'bank:reconcile'
+  | 'budget:view' | 'budget:manage'
+  | 'tax:view' | 'tax:manage'
+  | 'report:finance' | 'audit:view' | 'settings:finance'
 
 export interface User {
   id: string
@@ -403,4 +420,196 @@ export interface Activity {
   actor: string
   timestamp: string
   type: 'booking' | 'payment' | 'inventory' | 'maintenance' | 'guest'
+}
+
+/* ─────────────────────────── Finance module ───────────────────────────
+ * All money is a string (never a float). All dates are UTC ISO strings.
+ * See lib/money.ts for the decimal.js-backed helper API.
+ */
+
+export type AccountType = 'Asset' | 'Liability' | 'Equity' | 'Revenue' | 'Expense'
+export type NormalBalance = 'debit' | 'credit'
+export type AccountStatus = 'active' | 'archived'
+
+export interface Account {
+  id: string
+  code: string
+  name: string
+  type: AccountType
+  normalBalance: NormalBalance
+  parentId?: string
+  status: AccountStatus
+  description?: string
+  currency: string
+  /** Read-only hint from the API; used by the delete guard. */
+  postedEntryCount: number
+  createdAt: string
+  updatedAt: string
+}
+
+export interface JournalLine {
+  id: string
+  accountId: string
+  description: string
+  debit: string
+  credit: string
+  costCenter?: string
+  taxCode?: string
+}
+
+export type JournalEntryStatus = 'DRAFT' | 'POSTED' | 'REVERSED'
+
+export interface Attachment {
+  id: string
+  name: string
+  url: string
+  uploadedAt: string
+}
+
+export interface JournalEntry {
+  id: string
+  number: string
+  date: string
+  reference?: string
+  memo: string
+  lines: JournalLine[]
+  status: JournalEntryStatus
+  fiscalPeriodId: string
+  attachments: Attachment[]
+  createdBy: string
+  postedBy?: string
+  postedAt?: string
+  reversedEntryId?: string
+  createdAt: string
+  updatedAt: string
+}
+
+export interface Customer {
+  id: string
+  name: string
+  email: string
+  phone?: string
+  address?: string
+  currency: string
+  paymentTermsDays: number
+  status: 'active' | 'inactive'
+  createdAt: string
+}
+
+export interface InvoiceLine {
+  id: string
+  description: string
+  quantity: string
+  unitPrice: string
+  taxRateId?: string
+}
+
+/** Finance invoice. The legacy billing Invoice type remains `Invoice` in this file. */
+export interface FinanceInvoice {
+  id: string
+  number: string
+  customerId: string
+  customerName: string
+  lines: InvoiceLine[]
+  subtotal: string
+  discount: string
+  tax: string
+  total: string
+  amountPaid: string
+  currency: string
+  issueDate: string
+  dueDate: string
+  status: 'DRAFT' | 'SENT' | 'PARTIALLY_PAID' | 'PAID' | 'OVERDUE' | 'VOID'
+  notes?: string
+  createdAt: string
+  updatedAt: string
+}
+
+export interface BillLine {
+  id: string
+  description: string
+  quantity: string
+  unitPrice: string
+  taxRateId?: string
+}
+
+export interface Bill {
+  id: string
+  number: string
+  vendorId: string
+  vendorName: string
+  lines: BillLine[]
+  subtotal: string
+  tax: string
+  total: string
+  amountPaid: string
+  currency: string
+  issueDate: string
+  dueDate: string
+  status: 'DRAFT' | 'PENDING_APPROVAL' | 'APPROVED' | 'PARTIALLY_PAID' | 'PAID' | 'VOID'
+  approvedBy?: string
+  createdAt: string
+  updatedAt: string
+}
+
+/** Finance payment. The legacy billing Payment type remains `Payment` in this file. */
+export interface FinancePayment {
+  id: string
+  number: string
+  direction: 'incoming' | 'outgoing'
+  amount: string
+  currency: string
+  date: string
+  method: string
+  reference: string
+  idempotencyKey: string
+  allocations: Array<{ documentId: string; documentType: 'invoice' | 'bill'; amount: string }>
+  createdAt: string
+}
+
+export interface Expense {
+  id: string
+  number: string
+  claimant: string
+  category: string
+  accountId: string
+  amount: string
+  currency: string
+  description: string
+  receipt?: Attachment
+  status: 'DRAFT' | 'SUBMITTED' | 'APPROVED' | 'REIMBURSED' | 'REJECTED'
+  approvedBy?: string
+  createdAt: string
+  updatedAt: string
+}
+
+export interface TaxRate {
+  id: string
+  code: string
+  name: string
+  rate: string
+  accountId: string
+  status: 'active' | 'archived'
+  createdAt: string
+}
+
+export interface FiscalPeriod {
+  id: string
+  name: string
+  startDate: string
+  endDate: string
+  status: 'OPEN' | 'LOCKED' | 'CLOSED'
+}
+
+export interface AuditEvent {
+  id: string
+  action: 'create' | 'update' | 'delete' | 'post' | 'reverse' | 'approve' | 'reconcile'
+  entity: string
+  entityId: string
+  actor: string
+  timestamp: string
+  ip: string
+  reason?: string
+  before?: Record<string, unknown>
+  after?: Record<string, unknown>
 }

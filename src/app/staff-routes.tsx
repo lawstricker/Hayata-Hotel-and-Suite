@@ -40,6 +40,13 @@ const ReportsPage = lazy(() => import('@/features/reports/reports-page').then((m
 const StaffPage = lazy(() => import('@/features/admin/admin-pages').then((module) => ({ default: module.StaffPage })))
 const EventsPage = lazy(() => import('@/features/admin/admin-pages').then((module) => ({ default: module.EventsPage })))
 const SettingsPage = lazy(() => import('@/features/admin/admin-pages').then((module) => ({ default: module.SettingsPage })))
+const FinanceDashboardPage = lazy(() => import('@/features/finance/pages/finance-dashboard-page').then((module) => ({ default: module.FinanceDashboardPage })))
+const AccountsListPage = lazy(() => import('@/features/finance/pages/accounts-list-page').then((module) => ({ default: module.AccountsListPage })))
+const AccountFormPage = lazy(() => import('@/features/finance/pages/account-form-page').then((module) => ({ default: module.AccountFormPage })))
+const AccountDetailPage = lazy(() => import('@/features/finance/pages/account-detail-page').then((module) => ({ default: module.AccountDetailPage })))
+const InvoicesListPage = lazy(() => import('@/features/finance/pages/invoices-list-page').then((module) => ({ default: module.InvoicesListPage })))
+const InvoiceFormPage = lazy(() => import('@/features/finance/pages/invoice-form-page').then((module) => ({ default: module.InvoiceFormPage })))
+const InvoiceDetailPage = lazy(() => import('@/features/finance/pages/invoice-detail-page').then((module) => ({ default: module.InvoiceDetailPage })))
 const NotFoundPage = lazy(() => import('@/features/error/not-found-page').then((module) => ({ default: module.NotFoundPage })))
 
 function Guarded({ permission, children }: { permission: Permission; children: React.ReactNode }) {
@@ -87,6 +94,14 @@ export function StaffRoutes() {
           <Route path="billing/invoices" element={<Guarded permission="billing.view"><InvoicesPage /></Guarded>} />
           <Route path="billing/payments" element={<Guarded permission="billing.view"><PaymentsPage /></Guarded>} />
           <Route path="reports" element={<Guarded permission="report.view"><ReportsPage /></Guarded>} />
+          <Route path="finance" element={<Guarded permission="finance:view"><FinanceDashboardPage /></Guarded>} />
+          <Route path="finance/accounts" element={<Guarded permission="accounts:view"><AccountsListPage /></Guarded>} />
+          <Route path="finance/accounts/new" element={<Guarded permission="accounts:create"><AccountFormPage /></Guarded>} />
+          <Route path="finance/accounts/:accountId" element={<Guarded permission="accounts:view"><AccountDetailPage /></Guarded>} />
+          <Route path="finance/accounts/:accountId/edit" element={<Guarded permission="accounts:edit"><AccountFormPage /></Guarded>} />
+          <Route path="finance/invoices" element={<Guarded permission="invoice:view"><InvoicesListPage /></Guarded>} />
+          <Route path="finance/invoices/new" element={<Guarded permission="invoice:create"><InvoiceFormPage /></Guarded>} />
+          <Route path="finance/invoices/:invoiceId" element={<Guarded permission="invoice:view"><InvoiceDetailPage /></Guarded>} />
           <Route path="people" element={<Guarded permission="staff.view"><StaffPage /></Guarded>} />
           <Route path="events" element={<Guarded permission="event.view"><EventsPage /></Guarded>} />
           <Route path="settings" element={<Guarded permission="settings.view"><SettingsPage /></Guarded>} />

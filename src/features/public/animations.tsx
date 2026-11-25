@@ -1,26 +1,30 @@
 import { animate, motion, useInView, useReducedMotion, useScroll, useTransform, type Variants } from 'framer-motion'
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 
-const EASE = [0.22, 1, 0.36, 1] as const
+const EASE = [0.16, 1, 0.3, 1] as const
 
+/** Scroll-triggered reveal with a soft blur + lift. Triggers once as the element enters view. */
 export function Reveal({ children, delay = 0, y = 28, className = '' }: { children: ReactNode; delay?: number; y?: number; className?: string }) {
   const reduceMotion = useReducedMotion()
   return (
     <motion.div
       className={className}
-      initial={reduceMotion ? false : { opacity: 0, y }}
-      whileInView={{ opacity: 1, y: 0 }}
-      viewport={{ once: true, amount: 0.2 }}
-      transition={{ duration: 0.75, delay, ease: EASE }}
+      initial={reduceMotion ? false : { opacity: 0, y, filter: 'blur(6px)' }}
+      whileInView={{ opacity: 1, y: 0, filter: 'blur(0px)' }}
+      viewport={{ once: true, amount: 0.15, margin: '0px 0px -8% 0px' }}
+      transition={{ duration: 0.9, delay, ease: EASE }}
     >
       {children}
     </motion.div>
   )
 }
 
+/** Alias for call sites that prefer the explicit scroll-reveal name. */
+export const ScrollReveal = Reveal
+
 const wordVariants: Variants = {
-  hidden: { opacity: 0, y: '0.55em', rotateX: -45 },
-  visible: { opacity: 1, y: 0, rotateX: 0 },
+  hidden: { opacity: 0, y: '0.6em', rotateX: -35, filter: 'blur(8px)' },
+  visible: { opacity: 1, y: 0, rotateX: 0, filter: 'blur(0px)' },
 }
 
 export function RevealText({ text, className = '', delay = 0, wordDelay = 0.045 }: { text: string; className?: string; delay?: number; wordDelay?: number }) {
@@ -30,9 +34,9 @@ export function RevealText({ text, className = '', delay = 0, wordDelay = 0.045 
     <motion.span
       className={className}
       style={{ perspective: 800, display: 'inline-block' }}
-      initial="hidden"
+      initial={reduceMotion ? false : 'hidden'}
       whileInView="visible"
-      viewport={{ once: true, amount: 0.4 }}
+      viewport={{ once: true, amount: 0.3, margin: '0px 0px -10% 0px' }}
       transition={{ staggerChildren: wordDelay, delayChildren: delay }}
     >
       {words.map((word, index) => (
@@ -40,7 +44,7 @@ export function RevealText({ text, className = '', delay = 0, wordDelay = 0.045 
           key={`${word}-${index}`}
           className="inline-block origin-bottom"
           variants={reduceMotion ? undefined : wordVariants}
-          transition={{ duration: 0.7, ease: EASE }}
+          transition={{ duration: 0.9, ease: EASE }}
         >
           {word}
           {index < words.length - 1 ? '\u00A0' : ''}

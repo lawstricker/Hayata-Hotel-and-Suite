@@ -3,6 +3,7 @@ import { addDays, format } from 'date-fns'
 import { BedDouble, Brush, CalendarCheck2, Check, CircleDot, DoorOpen, GripVertical, LogIn, Plus, Sparkles, Wrench } from 'lucide-react'
 import { useState } from 'react'
 import { useForm } from 'react-hook-form'
+import { useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
 import { z } from 'zod'
 import { Badge } from '@/components/ui/badge'
@@ -17,7 +18,7 @@ import { PageHeader } from '@/components/common/page-header'
 import { StatusPill } from '@/components/common/status-pill'
 import { housekeepingTasks as seedTasks, maintenanceTickets as seedTickets, roomTypes } from '@/mock/data'
 import { useHotelStore } from '@/store/hotelStore'
-import { cn, formatCurrency } from '@/lib/utils'
+import { cn, downloadCsv, formatCurrency } from '@/lib/utils'
 import type { MaintenanceTicket, Room, TaskStatus } from '@/types/domain'
 
 const roomStatusStyles: Record<Room['status'], string> = {
@@ -30,6 +31,7 @@ const roomStatusStyles: Record<Room['status'], string> = {
 }
 
 export function FrontDeskPage() {
+  const navigate = useNavigate()
   const rooms = useHotelStore((state) => state.rooms)
   const reservations = useHotelStore((state) => state.reservations)
   const updateStatus = useHotelStore((state) => state.updateReservationStatus)
@@ -39,7 +41,7 @@ export function FrontDeskPage() {
   const dates = Array.from({ length: 7 }, (_, index) => addDays(new Date(), index))
   return (
     <div className="space-y-6">
-      <PageHeader title="Front desk" description="Live room rack, arrivals and departures at a glance." breadcrumbs={[{ label: 'Hotel operations' }, { label: 'Front desk' }]} actions={<><Button variant="outline" onClick={() => toast.info('Walk-in booking', { description: 'Availability opened in a new reservation flow.' })}><Plus /> Walk-in</Button><Button onClick={() => toast.success('Arrival report exported')}><CalendarCheck2 /> Arrival report</Button></>} />
+      <PageHeader title="Front desk" description="Live room rack, arrivals and departures at a glance." breadcrumbs={[{ label: 'Hotel operations' }, { label: 'Front desk' }]} actions={<><Button variant="outline" onClick={() => navigate('/staff/reservations')}><Plus /> Walk-in</Button><Button onClick={() => { downloadCsv('arrival-report.csv', arrivals.map((reservation) => ({ guest: reservation.guestName, roomType: reservation.roomType, checkIn: reservation.checkIn, status: reservation.status, rate: reservation.rate }))); toast.success('Arrival report exported', { description: `${arrivals.length} arrivals written to CSV` }) }}><CalendarCheck2 /> Arrival report</Button></>} />
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4"><KpiCard label="Available rooms" value={available} changeLabel={`${rooms.length - available} occupied`} icon={BedDouble} tone="teal" /><KpiCard label="Arrivals today" value="12" changeLabel="4 pending check-in" icon={LogIn} tone="blue" /><KpiCard label="Departures today" value="9" changeLabel="3 late check-outs" icon={DoorOpen} tone="amber" /><KpiCard label="Occupancy" value="78.4%" change={5.3} changeLabel="vs. last month" icon={Sparkles} tone="violet" /></div>
       <div className="grid gap-4 xl:grid-cols-[1.45fr_0.8fr]">
         <Card><CardHeader className="flex-row items-start justify-between space-y-0"><div><CardTitle>Room rack</CardTitle><CardDescription>40 rooms across 4 floors</CardDescription></div><div className="flex flex-wrap gap-2">{[['Available', 'bg-emerald-500'], ['Occupied', 'bg-blue-500'], ['Dirty', 'bg-amber-500'], ['Out of Order', 'bg-red-500']].map(([label, color]) => <span key={label} className="flex items-center gap-1 text-[10px] font-semibold text-muted-foreground"><i className={cn('size-2 rounded-full', color)} />{label}</span>)}</div></CardHeader><CardContent><div className="grid grid-cols-4 gap-2 sm:grid-cols-5 xl:grid-cols-8">{rooms.map((room) => <button key={room.id} type="button" onClick={() => toast.info(`Room ${room.number}`, { description: `${room.type} · ${room.guestName ?? 'No guest assigned'} · ${formatCurrency(room.rate)}/night` })} className={cn('group rounded-lg border p-2 text-left transition hover:-translate-y-0.5 hover:shadow-md', roomStatusStyles[room.status])}><div className="flex items-center justify-between"><span className="font-display text-sm font-extrabold">{room.number}</span><CircleDot className="size-3 opacity-50" /></div><p className="mt-1 truncate text-[9px] font-semibold opacity-70">{room.type.replace('Deluxe ', '')}</p><p className="mt-1 truncate text-[9px] opacity-60">{room.guestName ?? room.status}</p></button>)}</div></CardContent></Card>

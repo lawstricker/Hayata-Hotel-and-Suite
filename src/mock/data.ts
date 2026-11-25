@@ -42,6 +42,11 @@ export const demoUsers: User[] = [
   { id: 'usr-008', name: 'Grace Liu', email: 'grace@hayatahotel.com', role: 'ACCOUNTANT', department: 'Finance', status: 'Active', lastActive: '20 min ago' },
   { id: 'usr-009', name: 'Leo Martins', email: 'leo@hayatahotel.com', role: 'WAITER', department: 'Restaurant', status: 'Active', lastActive: '4 min ago' },
   { id: 'usr-010', name: 'Maya Thompson', email: 'maya@hayatahotel.com', role: 'BARTENDER', department: 'Bar', status: 'Active', lastActive: '7 min ago' },
+  { id: 'usr-011', name: 'Ada Nwosu', email: 'ada@hayatahotel.com', role: 'FOOD_BEVERAGE_STAFF', department: 'Food & Beverage', status: 'Active', lastActive: '3 min ago' },
+  { id: 'usr-012', name: 'Tobias Reed', email: 'admin@hayatahotel.com', role: 'ADMIN', department: 'Finance', status: 'Active', lastActive: 'Just now' },
+  { id: 'usr-013', name: 'Priya Shah', email: 'approver@hayatahotel.com', role: 'APPROVER', department: 'Finance', status: 'Active', lastActive: '2 min ago' },
+  { id: 'usr-014', name: 'Victor Cole', email: 'auditor@hayatahotel.com', role: 'AUDITOR', department: 'Finance', status: 'Active', lastActive: '6 min ago' },
+  { id: 'usr-015', name: 'Noah Bell', email: 'viewer@hayatahotel.com', role: 'VIEWER', department: 'Finance', status: 'Active', lastActive: '9 min ago' },
 ]
 
 export const roomTypes: RoomType[] = [
