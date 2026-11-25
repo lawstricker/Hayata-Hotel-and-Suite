@@ -43,6 +43,54 @@ function h_decode_rows(array $rows): array {
     return array_map('h_decode_row', $rows);
 }
 
+function h_num($value): float {
+    return is_numeric($value) ? (float) $value : 0.0;
+}
+
+/** Normalises an order line so the JSON contract matches the TypeScript OrderItem type. */
+function h_normalize_order_item(array $item): array {
+    $item['quantity'] = (int) h_num($item['quantity'] ?? 0);
+    $item['price'] = h_num($item['price'] ?? 0);
+    if (!is_array($item['modifiers'] ?? null)) $item['modifiers'] = [];
+    return $item;
+}
+
+/**
+ * Normalises an order so money/quantity fields are numbers and `items` is always an array.
+ * MySQL returns DECIMAL columns as strings, which would otherwise break arithmetic on the client.
+ */
+function h_normalize_order(array $order): array {
+    $order['items'] = array_map('h_normalize_order_item', is_array($order['items'] ?? null) ? $order['items'] : []);
+    foreach (['subtotal', 'discount', 'tax', 'tip', 'total'] as $field) {
+        $order[$field] = h_num($order[$field] ?? 0);
+    }
+    return $order;
+}
+
+/**
+ * Attaches line items from the `order_items` table to the given orders.
+ * The orders table has no `items` column, so every order needs its lines joined in.
+ */
+function h_attach_order_items(PDO $pdo, array $orders): array {
+    if (!$orders) return [];
+    $ids = array_values(array_unique(array_filter(array_column($orders, 'id'))));
+    $grouped = [];
+    if ($ids) {
+        $placeholders = implode(',', array_fill(0, count($ids), '?'));
+        $statement = $pdo->prepare("SELECT * FROM order_items WHERE order_id IN ($placeholders)");
+        $statement->execute($ids);
+        foreach (h_decode_rows($statement->fetchAll()) as $item) {
+            $grouped[(string) ($item['orderId'] ?? '')][] = h_normalize_order_item($item);
+        }
+    }
+    foreach ($orders as &$order) {
+        $order['items'] = $grouped[(string) ($order['id'] ?? '')] ?? [];
+        $order = h_normalize_order($order);
+    }
+    unset($order);
+    return $orders;
+}
+
 function h_table_columns(PDO $pdo, string $table): array {
     $statement = $pdo->prepare('SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = :table');
     $statement->execute(['table' => $table]);
@@ -458,6 +506,8 @@ if ($route === '/bootstrap' && $method === 'GET') {
     foreach ($tables as $key => $table) {
         $output[$key] = h_decode_rows($pdo->query("SELECT * FROM `$table` ORDER BY 1")->fetchAll());
     }
+    // Orders store their lines in `order_items`; join them in so the client receives complete orders.
+    $output['orders'] = h_attach_order_items($pdo, $output['orders'] ?? []);
     hayata_json($output);
 }
 
@@ -481,17 +531,29 @@ if (preg_match('#^/resource/([a-z-]+)(?:/([^/]+))?$#', $route, $matches)) {
 
     if ($method === 'GET' && !$id) {
         $limit = min(500, max(1, (int) ($query['limit'] ?? 200)));
-        hayata_json(h_decode_rows($pdo->query("SELECT * FROM `$table` ORDER BY 1 LIMIT $limit")->fetchAll()));
+        $rows = h_decode_rows($pdo->query("SELECT * FROM `$table` ORDER BY 1 LIMIT $limit")->fetchAll());
+        if ($table === 'orders') $rows = h_attach_order_items($pdo, $rows);
+        hayata_json($rows);
     }
     if ($method === 'GET' && $id) {
         $statement = $pdo->prepare("SELECT * FROM `$table` WHERE id = :id LIMIT 1");
         $statement->execute(['id' => $id]);
         $row = $statement->fetch();
         if (!$row) h_error('Not found.', 'NOT_FOUND', 404);
-        hayata_json(h_decode_row($row));
+        $decoded = h_decode_row($row);
+        if ($table === 'orders') $decoded = h_attach_order_items($pdo, [$decoded])[0];
+        hayata_json($decoded);
     }
+    // Orders and their lines are created by F&B staff (waiters, bartenders, managers),
+    // not only by administrators, so they get outlet-scoped permissions instead.
+    $orderPermissions = ['orders' => 'restaurant.orders', 'order_items' => 'restaurant.orders'];
+
     if ($method === 'POST') {
-        hayata_require_permission($pdo, 'settings.manage');
+        if (isset($orderPermissions[$table])) {
+            hayata_require_permission($pdo, $orderPermissions[$table]);
+        } else {
+            hayata_require_permission($pdo, 'settings.manage');
+        }
         if ($table === 'users') {
             $email = trim((string) ($body['email'] ?? ''));
             if ($email === '') h_error('Email is required.', 'VALIDATION');
@@ -521,7 +583,11 @@ if (preg_match('#^/resource/([a-z-]+)(?:/([^/]+))?$#', $route, $matches)) {
         hayata_json(h_decode_row($statement->fetch() ?: $body), 201);
     }
     if ($method === 'PUT' && $id) {
-        hayata_require_permission($pdo, 'settings.manage');
+        if (isset($orderPermissions[$table])) {
+            hayata_require_permission($pdo, $orderPermissions[$table]);
+        } else {
+            hayata_require_permission($pdo, 'settings.manage');
+        }
         if ($table === 'users') {
             $email = trim((string) ($body['email'] ?? ''));
             if ($email !== '') {

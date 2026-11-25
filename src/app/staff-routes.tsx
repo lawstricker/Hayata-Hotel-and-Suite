@@ -47,6 +47,7 @@ const AccountDetailPage = lazy(() => import('@/features/finance/pages/account-de
 const InvoicesListPage = lazy(() => import('@/features/finance/pages/invoices-list-page').then((module) => ({ default: module.InvoicesListPage })))
 const InvoiceFormPage = lazy(() => import('@/features/finance/pages/invoice-form-page').then((module) => ({ default: module.InvoiceFormPage })))
 const InvoiceDetailPage = lazy(() => import('@/features/finance/pages/invoice-detail-page').then((module) => ({ default: module.InvoiceDetailPage })))
+const WebsiteBuilderPage = lazy(() => import('@/features/admin/website-builder-page').then((module) => ({ default: module.WebsiteBuilderPage })))
 const NotFoundPage = lazy(() => import('@/features/error/not-found-page').then((module) => ({ default: module.NotFoundPage })))
 
 function Guarded({ permission, children }: { permission: Permission; children: React.ReactNode }) {
@@ -105,6 +106,7 @@ export function StaffRoutes() {
           <Route path="people" element={<Guarded permission="staff.view"><StaffPage /></Guarded>} />
           <Route path="events" element={<Guarded permission="event.view"><EventsPage /></Guarded>} />
           <Route path="settings" element={<Guarded permission="settings.view"><SettingsPage /></Guarded>} />
+          <Route path="website" element={<Guarded permission="settings.manage"><WebsiteBuilderPage /></Guarded>} />
           <Route path="settings/rbac-editor" element={<Guarded permission="settings.rbac"><SettingsPage /></Guarded>} />
           <Route path="settings/printer-settings" element={<Guarded permission="settings.manage"><SettingsPage /></Guarded>} />
           <Route path="audit" element={<Guarded permission="settings.view"><SettingsPage /></Guarded>} />

@@ -45,9 +45,9 @@ export function buildReceiptText(order: Order, context: PrintContext, settings: 
     divider(width),
   ]
 
-  order.items.forEach((item) => {
+  ;(order.items ?? []).forEach((item) => {
     lines.push(row(`${item.quantity}x ${item.name}`, formatAmount(item.price * item.quantity), width))
-    item.modifiers.forEach((modifier) => lines.push(`   - ${modifier}`.slice(0, width)))
+    ;(item.modifiers ?? []).forEach((modifier) => lines.push(`   - ${modifier}`.slice(0, width)))
   })
 
   lines.push(divider(width))

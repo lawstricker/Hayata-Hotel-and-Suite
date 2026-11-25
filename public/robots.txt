@@ -1,0 +1,9 @@
+User-agent: *
+Allow: /
+
+# Staff workspace, guest displays and room menus are private.
+Disallow: /staff/
+Disallow: /display/
+Disallow: /room/
+
+Sitemap: https://hayatahotel.com/sitemap.xml

@@ -1,5 +1,6 @@
 import { lazy, Suspense, type ReactNode } from 'react'
 import { Navigate, Route, Routes, useLocation } from 'react-router-dom'
+import { ErrorBoundary } from '@/components/error-boundary'
 import { Skeleton } from '@/components/ui/skeleton'
 import { legacyStaffRedirects } from '@/lib/staff-routes'
 import { PublicRoutes } from '@/app/public-routes'
@@ -22,14 +23,17 @@ function PublicOrLegacyRoute({ children }: { children: ReactNode }) {
 }
 
 export function AppRoutes() {
+  const location = useLocation()
   return (
-    <Suspense fallback={<RouteLoader />}>
-      <Routes>
-        <Route path="/room/:roomNumber/menu" element={<RoomMenuPage />} />
-        <Route path="/display/:outlet" element={<PosDisplayPage />} />
-        <Route path="/staff/*" element={<StaffRoutes />} />
-        <Route path="*" element={<PublicOrLegacyRoute><PublicRoutes /></PublicOrLegacyRoute>} />
-      </Routes>
-    </Suspense>
+    <ErrorBoundary key={location.pathname}>
+      <Suspense fallback={<RouteLoader />}>
+        <Routes>
+          <Route path="/room/:roomNumber/menu" element={<RoomMenuPage />} />
+          <Route path="/display/:outlet" element={<PosDisplayPage />} />
+          <Route path="/staff/*" element={<StaffRoutes />} />
+          <Route path="*" element={<PublicOrLegacyRoute><PublicRoutes /></PublicOrLegacyRoute>} />
+        </Routes>
+      </Suspense>
+    </ErrorBoundary>
   )
 }

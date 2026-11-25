@@ -4,6 +4,7 @@ import { useEffect, useState, type FormEvent } from 'react'
 import { Link, NavLink, Outlet, useLocation } from 'react-router-dom'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
+import { ErrorBoundary } from '@/components/error-boundary'
 import { Input } from '@/components/ui/input'
 import { ScrollProgress, Reveal } from '@/features/public/animations'
 import { useNewsletter } from '@/hooks/public/use-public-api'
@@ -180,7 +181,9 @@ export function PublicShell() {
           exit={reduceMotion ? undefined : { opacity: 0, y: -8 }}
           transition={{ duration: 0.35, ease: [0.22, 1, 0.36, 1] }}
         >
-          <Outlet />
+          <ErrorBoundary key={location.pathname}>
+            <Outlet />
+          </ErrorBoundary>
         </motion.main>
       </AnimatePresence>
       <PublicFooter />

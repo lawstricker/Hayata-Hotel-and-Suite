@@ -1,4 +1,5 @@
 import { useAuthStore } from '@/store/authStore'
+import { devRequest } from './dev-fallback'
 
 export interface ApiErrorEnvelope {
   code: string
@@ -22,6 +23,16 @@ export class FinanceApiError extends Error {
 
 /** Typed client for /api/finance/* – fulfilled by MSW in dev, by the REST backend in production. */
 export async function financeRequest<T>(path: string, init: RequestInit = {}): Promise<T> {
+  if (import.meta.env.DEV) {
+    // TODO(API): in development the finance API is served in-process so no service worker
+    // interferes with public/guest routes. Production uses the REST backend below.
+    const result = devRequest(path, init)
+    if (result.status >= 400) {
+      const { code = 'UNKNOWN_ERROR', message = 'Request failed', fieldErrors } = result.body as unknown as ApiErrorEnvelope
+      throw new FinanceApiError({ code, message, fieldErrors }, result.status)
+    }
+    return result.body.data as T
+  }
   const user = useAuthStore.getState().user
   const response = await fetch(`/api/finance${path}`, {
     ...init,

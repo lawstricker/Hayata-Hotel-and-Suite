@@ -2,6 +2,7 @@ import { AnimatePresence, motion } from 'framer-motion'
 import { MoreHorizontal } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { NavLink, Outlet, useLocation } from 'react-router-dom'
+import { ErrorBoundary } from '@/components/error-boundary'
 import { cn } from '@/lib/utils'
 import { useLiveSimulation } from '@/hooks/useLiveSimulation'
 import { usePrinterQueue } from '@/hooks/usePrinterQueue'
@@ -42,7 +43,9 @@ export function AppShell() {
               transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
               className="page-enter"
             >
-              <Outlet />
+              <ErrorBoundary key={location.pathname}>
+                <Outlet />
+              </ErrorBoundary>
             </motion.div>
           </AnimatePresence>
         </main>

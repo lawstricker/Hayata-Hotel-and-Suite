@@ -14,6 +14,8 @@ A polished, production-style frontend for a complete hotel operations platform. 
 - **Enterprise design system** built with Tailwind CSS 4 and Radix-based shadcn-style primitives, including light/dark themes, persistent sidebar, command palette, notifications, skeletons, toasts, responsive mobile navigation, and accessible focus states.
 - **Subtle motion** with Framer Motion for route transitions, KPI updates, POS interactions, and live feedback.
 - **Finance & accounting workspace** at `/staff/finance` with an accounting dashboard, hierarchical chart of accounts, invoice creation, receivable aging, partial payments, PDF invoice generation and decimal-safe money helpers (`docs/finance/README.md`).
+- **SEO-ready public website** with route-aware meta tags, Open Graph/Twitter previews, Hotel structured data, sitemap, robots rules and an admin SEO settings tab (`docs/seo/README.md`).
+- **Visual homepage builder** at `/staff/website` powered by Puck: drag, reorder and edit homepage sections, then publish them to the public site.
 
 ## Tech stack
 
@@ -92,6 +94,18 @@ To recreate the database and seed data:
 & "C:\xampp\php\php.exe" "server\php\setup.php"
 Copy-Item "server\php\*" "C:\xampp\htdocs\hayata-api" -Force
 ```
+
+To re-sync roles, permissions and demo staff accounts against an existing database
+without dropping any data (safe to run at any time):
+
+```powershell
+& "C:\xampp\php\php.exe" "server\php\seed_access.php"
+Copy-Item "server\php\*" "C:\xampp\htdocs\hayata-api" -Force
+```
+
+The role/permission matrix lives in `server/php/access-matrix.php` and is the single
+source of truth shared by `setup.php`, `seed_access.php` and the client-side matrix in
+`src/lib/permission-data.ts`. Keep the three in step when adding a role or permission.
 
 The frontend tries the API first and falls back to the in-browser mock data if the API is unavailable. Configure it with `.env`:
 

@@ -130,7 +130,7 @@ export const useHotelStore = create<HotelState>((set, get) => ({
     if (status === 'Checked in' && roomNumber) eventBus.emit({ type: 'checkin.created', payload: { reservationId, guestName: get().reservations.find((reservation) => reservation.id === reservationId)?.guestName ?? 'Guest', roomNumber } })
   },
   addOrder: (order) => {
-    syncOrderCreate(order)
+    void syncOrderCreate(order)
     logActivity({ action: 'Order created', module: order.outlet === 'BAR' ? 'Bar' : 'Restaurant', detail: `${order.orderNumber} · ${order.type} · ${order.total}` })
     upsertLiveOrder(order)
     set((state) => ({ orders: [order, ...state.orders.filter((candidate) => candidate.id !== order.id)] }))
@@ -153,12 +153,22 @@ export const useHotelStore = create<HotelState>((set, get) => ({
     const storedIds = new Set(stored.map((reservation) => reservation.id))
     return { reservations: [...stored, ...state.reservations.filter((reservation) => !storedIds.has(reservation.id))] }
   }),
-  hydrateFromServer: (data) => set((state) => ({
-    reservations: data.reservations ?? state.reservations,
-    rooms: data.rooms ?? state.rooms,
-    orders: data.orders ?? state.orders,
-    inventory: data.inventory ?? state.inventory,
-  })),
+  hydrateFromServer: (data) => set((state) => {
+    const serverOrders = data.orders ?? state.orders
+    // Keep locally-created room-service orders that the server has not echoed back yet,
+    // and never let a hydrated order lose its line items.
+    const byId = new Map(serverOrders.map((order) => [order.id, { ...order, items: order.items ?? [] }]))
+    for (const live of readLiveOrders()) {
+      const existing = byId.get(live.id)
+      byId.set(live.id, existing ? { ...existing, items: existing.items?.length ? existing.items : live.items } : { ...live, items: live.items ?? [] })
+    }
+    return {
+      reservations: data.reservations ?? state.reservations,
+      rooms: data.rooms ?? state.rooms,
+      orders: [...byId.values()],
+      inventory: data.inventory ?? state.inventory,
+    }
+  }),
   addPurchaseOrder: (purchaseOrder) => {
     logActivity({ action: 'Purchase order created', module: 'Inventory', detail: `${purchaseOrder.poNumber} · ${purchaseOrder.supplierName} · ${purchaseOrder.total}` })
     set((state) => ({ purchaseOrders: [purchaseOrder, ...state.purchaseOrders] }))

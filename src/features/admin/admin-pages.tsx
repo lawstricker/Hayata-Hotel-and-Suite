@@ -1,5 +1,5 @@
 import { zodResolver } from '@hookform/resolvers/zod'
-import { Building2, CalendarDays, Check, Clock3, Download, FileClock, Pencil, Plus, Save, ShieldCheck, Trash2, UserRound, Users } from 'lucide-react'
+import { Building2, CalendarDays, Check, CheckCircle2, Clock3, Copy, Download, FileClock, Pencil, Plus, RotateCcw, Save, ShieldCheck, Trash2, UserRound, Users } from 'lucide-react'
 import { useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { useSearchParams } from 'react-router-dom'
@@ -9,7 +9,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
-import { Input, Label } from '@/components/ui/input'
+import { Input, Label, Textarea } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { DataTable, type DataTableColumn } from '@/components/common/data-table'
@@ -23,11 +23,12 @@ import { logActivity } from '@/lib/activity-log'
 import { roleLabels } from '@/lib/rbac'
 import { auditLogs, demoUsers, eventBookings, shifts } from '@/mock/data'
 import { useAuthStore } from '@/store/authStore'
+import { defaultSeoSettings, useSeoStore, type SeoSettings } from '@/store/seoStore'
 import { notificationRows, useSettingsStore, type OutletSetting } from '@/store/settingsStore'
 import { useActivityLogStore } from '@/store/activityLogStore'
 import { useRbacStore } from '@/store/rbacStore'
 import { useStaffStore } from '@/store/staffStore'
-import { cn, downloadCsv, formatCurrency, formatDate } from '@/lib/utils'
+import { cn, copyToClipboard, downloadCsv, formatCurrency, formatDate } from '@/lib/utils'
 import type { EventBooking, Permission, Role, User } from '@/types/domain'
 
 const staffSchema = z.object({
@@ -294,6 +295,110 @@ function SelectSimple({ value, onChange }: { value: string; onChange: (value: st
   return <select value={value} onChange={(event) => onChange(event.target.value)} className="h-9 rounded-lg border border-input bg-background px-3 text-xs"><option>Nearest cent</option><option>Nearest 0.05</option></select>
 }
 
+function SeoSettingsPanel() {
+  const settings = useSeoStore((state) => state.settings)
+  const update = useSeoStore((state) => state.update)
+  const reset = useSeoStore((state) => state.reset)
+  const [draft, setDraft] = useState<SeoSettings>(settings)
+  const [preview, setPreview] = useState(false)
+
+  function patch<K extends keyof SeoSettings>(key: K, value: SeoSettings[K]) {
+    setDraft((current) => ({ ...current, [key]: value }))
+  }
+  function save() {
+    if (!/^https?:\/\/\S+/.test(draft.canonicalBaseUrl.trim())) {
+      toast.error('Enter a full canonical URL', { description: 'Include https:// and your public domain.' })
+      return
+    }
+    update(draft)
+    useSettingsStore.getState().markSaved()
+    logActivity({ action: 'SEO settings updated', module: 'Settings', detail: draft.canonicalBaseUrl })
+    toast.success('SEO settings saved', { description: 'Metadata and structured data updated on the public website.' })
+  }
+  async function copySiteFiles() {
+    const base = draft.canonicalBaseUrl.replace(/\/$/, '')
+    const paths = ['/', '/rooms', '/apartments', '/amenities', '/dining', '/gallery', '/about', '/contact', '/booking/dates', '/manage-booking']
+    const sitemap = `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${paths.map((path) => `  <url><loc>${base}${path}</loc></url>`).join('\n')}\n</urlset>`
+    const robots = `User-agent: *\nAllow: /\nDisallow: /staff/\nDisallow: /display/\nDisallow: /room/\n\nSitemap: ${base}/sitemap.xml`
+    await copyToClipboard(`${sitemap}\n\n--- robots.txt ---\n\n${robots}`)
+    toast.success('Site files copied', { description: 'Replace public/sitemap.xml and public/robots.txt on your host.' })
+  }
+  async function copyTags() {
+    const tags = [
+      `<title>${draft.defaultTitle}</title>`,
+      `<meta name="description" content="${draft.description}" />`,
+      `<link rel="canonical" href="${draft.canonicalBaseUrl.replace(/\/$/, '')}/" />`,
+      `<meta property="og:title" content="${draft.defaultTitle}" />`,
+      `<meta property="og:description" content="${draft.description}" />`,
+      `<meta property="og:image" content="${draft.ogImage}" />`,
+      draft.googleVerification ? `<meta name="google-site-verification" content="${draft.googleVerification}" />` : '',
+    ].filter(Boolean)
+    await copyToClipboard(tags.join('\n'))
+    toast.success('Meta tags copied', { description: 'Paste these into your static host if needed.' })
+  }
+
+  return (
+    <div className="space-y-4">
+      <Card>
+        <CardHeader>
+          <CardTitle>Search engine settings</CardTitle>
+          <CardDescription>These values drive page titles, meta tags, canonical URLs, social previews and Hotel structured data on the public website.</CardDescription>
+        </CardHeader>
+        <CardContent className="grid gap-4 sm:grid-cols-2">
+          <div className="space-y-1.5"><Label htmlFor="seo-site-name">Site name</Label><Input id="seo-site-name" value={draft.siteName} onChange={(event) => patch('siteName', event.target.value)} /></div>
+          <div className="space-y-1.5"><Label htmlFor="seo-title">Default page title</Label><Input id="seo-title" value={draft.defaultTitle} onChange={(event) => patch('defaultTitle', event.target.value)} /></div>
+          <div className="space-y-1.5 sm:col-span-2"><Label htmlFor="seo-description">Meta description</Label><Textarea id="seo-description" value={draft.description} onChange={(event) => patch('description', event.target.value)} placeholder="150–160 characters works best" /><p className="text-[10px] text-muted-foreground">{draft.description.length} characters</p></div>
+          <div className="space-y-1.5 sm:col-span-2"><Label htmlFor="seo-keywords">Keywords</Label><Input id="seo-keywords" value={draft.keywords} onChange={(event) => patch('keywords', event.target.value)} /></div>
+          <div className="space-y-1.5"><Label htmlFor="seo-base-url">Canonical base URL</Label><Input id="seo-base-url" value={draft.canonicalBaseUrl} onChange={(event) => patch('canonicalBaseUrl', event.target.value)} placeholder="https://your-domain.com" /><p className="text-[10px] text-muted-foreground">Use the public HTTPS domain registered in Search Console.</p></div>
+          <div className="space-y-1.5"><Label htmlFor="seo-locale">Locale</Label><select id="seo-locale" value={draft.locale} onChange={(event) => patch('locale', event.target.value)} className="h-10 w-full rounded-lg border border-input bg-background px-3 text-sm"><option value="en_NG">English (Nigeria)</option><option value="en_US">English (US)</option><option value="en_GB">English (UK)</option></select></div>
+          <div className="space-y-1.5 sm:col-span-2"><Label htmlFor="seo-og-image">Social preview image URL</Label><Input id="seo-og-image" value={draft.ogImage} onChange={(event) => patch('ogImage', event.target.value)} /></div>
+          <div className="space-y-1.5"><Label htmlFor="seo-twitter">Twitter handle</Label><Input id="seo-twitter" value={draft.twitterHandle} onChange={(event) => patch('twitterHandle', event.target.value)} placeholder="@hayatahotel" /></div>
+          <div className="space-y-1.5"><Label htmlFor="seo-theme">Theme colour</Label><Input id="seo-theme" type="color" value={draft.themeColor} onChange={(event) => patch('themeColor', event.target.value)} className="h-10 w-full p-1" /></div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader><CardTitle>Search Console verification</CardTitle><CardDescription>Paste the verification values from Google Search Console and Bing Webmaster Tools. They are added as meta tags on the homepage.</CardDescription></CardHeader>
+        <CardContent className="grid gap-4 sm:grid-cols-2">
+          <div className="space-y-1.5"><Label htmlFor="seo-google">Google verification content</Label><Input id="seo-google" value={draft.googleVerification} onChange={(event) => patch('googleVerification', event.target.value)} placeholder="google-site-verification code" /></div>
+          <div className="space-y-1.5"><Label htmlFor="seo-bing">Bing verification content</Label><Input id="seo-bing" value={draft.bingVerification} onChange={(event) => patch('bingVerification', event.target.value)} placeholder="msvalidate.01 code" /></div>
+          <div className="flex items-center justify-between rounded-lg border border-border p-3 sm:col-span-2"><div><p className="text-sm font-bold">Allow indexing</p><p className="text-xs text-muted-foreground">Turn off to add noindex to every public page (useful while staging).</p></div><Switch checked={draft.indexEnabled} onCheckedChange={(value) => patch('indexEnabled', value)} aria-label="Allow search engine indexing" /></div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader><CardTitle>Hotel structured data</CardTitle><CardDescription>Published as JSON-LD so search engines understand the property.</CardDescription></CardHeader>
+        <CardContent className="grid gap-4 sm:grid-cols-2">
+          <div className="space-y-1.5"><Label htmlFor="seo-hotel-name">Hotel name</Label><Input id="seo-hotel-name" value={draft.hotel.name} onChange={(event) => patch('hotel', { ...draft.hotel, name: event.target.value })} /></div>
+          <div className="space-y-1.5"><Label htmlFor="seo-hotel-phone">Telephone</Label><Input id="seo-hotel-phone" value={draft.hotel.telephone} onChange={(event) => patch('hotel', { ...draft.hotel, telephone: event.target.value })} /></div>
+          <div className="space-y-1.5"><Label htmlFor="seo-hotel-address">Address</Label><Input id="seo-hotel-address" value={draft.hotel.address} onChange={(event) => patch('hotel', { ...draft.hotel, address: event.target.value })} /></div>
+          <div className="space-y-1.5"><Label htmlFor="seo-hotel-price">Price range</Label><Input id="seo-hotel-price" value={draft.hotel.priceRange} onChange={(event) => patch('hotel', { ...draft.hotel, priceRange: event.target.value })} /></div>
+        </CardContent>
+      </Card>
+
+      <div className="flex flex-wrap gap-2">
+        <Button onClick={save}><CheckCircle2 /> Save SEO settings</Button>
+        <Button variant="outline" onClick={() => setPreview(true)}><ShieldCheck /> Preview Google result</Button>
+        <Button variant="outline" onClick={() => void copyTags()}><Copy /> Copy meta tags</Button>
+        <Button variant="outline" onClick={() => void copySiteFiles()}><Copy /> Copy sitemap &amp; robots</Button>
+        <Button variant="ghost" onClick={() => { reset(); setDraft(defaultSeoSettings); toast.success('SEO settings reset') }}><RotateCcw /> Reset defaults</Button>
+      </div>
+
+      <Dialog open={preview} onOpenChange={setPreview}>
+        <DialogContent className="max-w-xl">
+          <DialogHeader><DialogTitle>Google result preview</DialogTitle><DialogDescription>Approximate snippet for the homepage.</DialogDescription></DialogHeader>
+          <div className="rounded-xl border border-border p-5">
+            <p className="text-xs text-muted-foreground">{draft.canonicalBaseUrl.replace(/\/$/, '')} › Home</p>
+            <p className="mt-1 text-lg text-blue-700 dark:text-blue-400">{draft.defaultTitle}</p>
+            <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{draft.description}</p>
+          </div>
+          <DialogFooter><Button onClick={() => setPreview(false)}>Close</Button></DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </div>
+  )
+}
+
 export function SettingsPage() {
   const [searchParams] = useSearchParams()
   const requestedTab = searchParams.get('tab')
@@ -354,6 +459,7 @@ export function SettingsPage() {
           <TabsTrigger value="printer">Kitchen printer</TabsTrigger>
           <TabsTrigger value="payments">Payment gateway</TabsTrigger>
           <TabsTrigger value="notifications">Notifications</TabsTrigger>
+          <TabsTrigger value="seo">SEO</TabsTrigger>
           {canManageRoles && <TabsTrigger value="roles">Roles & permissions</TabsTrigger>}
           <TabsTrigger value="audit">Audit log</TabsTrigger>
         </TabsList>
@@ -404,6 +510,7 @@ export function SettingsPage() {
           </div>
         </TabsContent>
 
+        <TabsContent value="seo"><SeoSettingsPanel /></TabsContent>
         <TabsContent value="printer"><KitchenPrinterSettings /></TabsContent>
         <TabsContent value="payments"><PaymentGatewaySettings /></TabsContent>
 

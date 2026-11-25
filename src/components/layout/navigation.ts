@@ -115,6 +115,7 @@ export const navigation: NavGroup[] = [
     label: 'Administration',
     items: [
       { label: 'Settings', path: '/staff/settings', icon: Settings, permissions: ['settings.view'] },
+      { label: 'Website builder', path: '/staff/website', icon: Sparkles, permissions: ['settings.manage'] },
     ],
   },
 ]

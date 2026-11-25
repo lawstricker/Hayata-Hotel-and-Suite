@@ -215,7 +215,7 @@ export function RoomMenuPage() {
                   {roomOrders.slice(0, 3).map((order) => (
                     <div key={order.id} className="flex items-center gap-3 rounded-lg bg-muted/45 p-3">
                       <span className="font-mono text-xs font-extrabold">{order.orderNumber}</span>
-                      <span className="text-[11px] text-muted-foreground">{order.items.reduce((sum, line) => sum + line.quantity, 0)} items</span>
+                      <span className="text-[11px] text-muted-foreground">{(order.items ?? []).reduce((sum, line) => sum + line.quantity, 0)} items</span>
                       <StatusPill status={order.status} className="ml-auto" />
                     </div>
                   ))}
