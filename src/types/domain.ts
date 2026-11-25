@@ -74,7 +74,8 @@ export interface Reservation {
   adults: number
   children: number
   status: ReservationStatus
-  source: 'Direct' | 'Booking.com' | 'Expedia' | 'Corporate' | 'Walk-in'
+  source: 'Direct' | 'Booking.com' | 'Expedia' | 'Corporate' | 'Walk-in' | 'ONLINE'
+  channel?: 'WEBSITE' | 'DIRECT' | 'OTA'
   ratePlan: string
   rate: number
   deposit: number

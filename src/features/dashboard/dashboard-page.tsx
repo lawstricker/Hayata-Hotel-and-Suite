@@ -211,7 +211,7 @@ export function DashboardPage() {
                 <span className="font-display text-sm font-extrabold text-red-600">{alert.currentStock}</span>
               </div>
             ))}
-            <Button asChild variant="ghost" className="w-full"><a href="/inventory/alerts">View all alerts <ArrowRight /></a></Button>
+            <Button asChild variant="ghost" className="w-full"><a href="/staff/inventory/alerts">View all alerts <ArrowRight /></a></Button>
           </CardContent>
         </Card>
       </div>

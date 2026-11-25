@@ -15,7 +15,7 @@ import { useHotelStore } from '@/store/hotelStore'
 import type { Role } from '@/types/domain'
 
 const pageNames: Record<string, string> = {
-  reservations: 'Reservations', 'front-desk': 'Front Desk', rooms: 'Rooms & Room Types', housekeeping: 'Housekeeping', maintenance: 'Maintenance', guests: 'Guest Directory', crm: 'CRM', restaurant: 'Restaurant', bar: 'Bar', inventory: 'Inventory', billing: 'Billing & Payments', reports: 'Reports & Analytics', staff: 'Staff & HR', events: 'Events & Banquet', settings: 'Settings',
+  reservations: 'Reservations', 'front-desk': 'Front Desk', rooms: 'Rooms & Room Types', housekeeping: 'Housekeeping', maintenance: 'Maintenance', guests: 'Guest Directory', crm: 'CRM', restaurant: 'Restaurant', bar: 'Bar', inventory: 'Inventory', billing: 'Billing & Payments', reports: 'Reports & Analytics', people: 'Staff & HR', events: 'Events & Banquet', settings: 'Settings', 'qr-menu': 'In-room QR menus', dashboard: 'Dashboard',
 }
 
 interface TopbarProps {
@@ -48,19 +48,20 @@ export function Topbar({ onMenuClick, onSearchClick }: TopbarProps) {
 
   if (!user) return null
 
-  const root = location.pathname.split('/')[1]
+  const segments = location.pathname.split('/').filter(Boolean)
+  const root = segments[0] === 'staff' ? segments[1] ?? 'dashboard' : segments[0]
   const pageName = root ? pageNames[root] ?? root.replaceAll('-', ' ') : 'Dashboard'
 
   function handleRoleChange(role: Role) {
     switchRole(role)
-    const currentSection = navigation.flatMap((group) => group.items).find((item) => location.pathname.startsWith(item.path) && item.path !== '/')
-    if (currentSection && !canAny(role, currentSection.permissions)) navigate('/')
+    const currentSection = navigation.flatMap((group) => group.items).find((item) => location.pathname.startsWith(item.path) && item.path !== '/staff')
+    if (currentSection && !canAny(role, currentSection.permissions)) navigate('/staff')
     toast.success(`Switched to ${roleLabels[role]}`, { description: 'Navigation and data visibility now reflect this role.' })
   }
 
   function handleLogout() {
     logout()
-    navigate('/login')
+    navigate('/staff/login')
     toast.success('Signed out securely')
   }
 
@@ -111,14 +112,14 @@ export function Topbar({ onMenuClick, onSearchClick }: TopbarProps) {
             </div>
             <div className="max-h-80 overflow-y-auto p-1.5">
               {visibleAlerts.slice(0, 5).map((alert) => (
-                <button key={alert.id} type="button" onClick={() => { navigate('/inventory/alerts'); setNotificationOpen(false) }} className="flex w-full gap-3 rounded-lg p-3 text-left transition-colors hover:bg-muted">
+                <button key={alert.id} type="button" onClick={() => { navigate('/staff/inventory/alerts'); setNotificationOpen(false) }} className="flex w-full gap-3 rounded-lg p-3 text-left transition-colors hover:bg-muted">
                   <span className={cn('mt-1 size-2 shrink-0 rounded-full', alert.type === 'critical' ? 'bg-red-500' : 'bg-amber-500')} />
                   <span className="min-w-0"><span className="block truncate text-sm font-semibold">{alert.itemName}</span><span className="mt-0.5 block text-xs text-muted-foreground">{alert.currentStock} remaining · reorder at {alert.threshold}</span></span>
                 </button>
               ))}
               {!visibleAlerts.length && <p className="px-4 py-8 text-center text-sm text-muted-foreground">You’re all caught up.</p>}
             </div>
-            <button type="button" onClick={() => { navigate('/inventory/alerts'); setNotificationOpen(false) }} className="w-full border-t border-border py-3 text-xs font-bold text-primary hover:bg-muted/50">View all alerts</button>
+            <button type="button" onClick={() => { navigate('/staff/inventory/alerts'); setNotificationOpen(false) }} className="w-full border-t border-border py-3 text-xs font-bold text-primary hover:bg-muted/50">View all alerts</button>
           </DropdownMenuContent>
         </DropdownMenu>
 
@@ -151,7 +152,7 @@ export function Topbar({ onMenuClick, onSearchClick }: TopbarProps) {
               </DropdownMenuItem>
             ))}
             <DropdownMenuSeparator />
-            <DropdownMenuItem onClick={() => navigate('/settings')}><Settings /> Settings</DropdownMenuItem>
+            <DropdownMenuItem onClick={() => navigate('/staff/settings')}><Settings /> Settings</DropdownMenuItem>
             <DropdownMenuItem onClick={handleLogout} className="text-destructive focus:text-destructive"><LogOut /> Sign out</DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>

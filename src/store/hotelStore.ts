@@ -1,6 +1,9 @@
 import { create } from 'zustand'
 import { eventBus } from '@/mock/eventBus'
 import { readLiveOrders, subscribeToLiveOrders, updateLiveOrderStatus, upsertLiveOrder } from '@/lib/order-sync'
+import { readLiveReservations, subscribeToLiveReservations, updateLiveReservationStatus, upsertLiveReservation } from '@/lib/reservation-sync'
+import { syncOrderCreate, syncOrderStatus, syncReservationCreate, syncReservationStatus, syncStockAdjust } from '@/lib/server-sync'
+import { logActivity } from '@/lib/activity-log'
 import {
   inventoryItems as seedInventory,
   orders as seedOrders,
@@ -37,6 +40,8 @@ interface HotelState {
   addOrder: (order: Order) => void
   updateOrderStatus: (orderId: string, status: Order['status']) => void
   syncLiveOrders: () => void
+  syncLiveReservations: () => void
+  hydrateFromServer: (data: Partial<Pick<HotelState, 'reservations' | 'rooms' | 'orders' | 'inventory'>>) => void
   addPurchaseOrder: (purchaseOrder: PurchaseOrder) => void
   updatePurchaseOrderStatus: (purchaseOrderId: string, status: PurchaseOrder['status']) => void
   addInventoryItem: (item: InventoryItem) => void
@@ -47,7 +52,7 @@ export const useHotelStore = create<HotelState>((set, get) => ({
   movements: seedMovements,
   alerts: seedAlerts,
   orders: [...readLiveOrders(), ...seedOrders],
-  reservations: seedReservations,
+  reservations: [...readLiveReservations(), ...seedReservations],
   rooms: seedRooms,
   purchaseOrders: seedPurchaseOrders,
   adjustStock: (itemId, delta, type = 'Adjustment', reference = 'ADJ-MANUAL', note) => {
@@ -89,31 +94,51 @@ export const useHotelStore = create<HotelState>((set, get) => ({
       movements: [movement, ...state.movements],
       alerts: crossedThreshold ? [alert, ...state.alerts] : state.alerts,
     }))
+    syncStockAdjust(itemId, delta, reference, note)
+    logActivity({ action: 'Stock adjusted', module: 'Inventory', detail: `${item.name} · ${delta > 0 ? '+' : ''}${delta} · ${reference}` })
     eventBus.emit({ type: 'stock.level.changed', payload: { itemId, itemName: item.name, from, to, outlet: item.outlet } })
     if (crossedThreshold) eventBus.emit({ type: 'low_stock.triggered', payload: { itemId, itemName: item.name, stock: to, threshold: item.reorderPoint } })
   },
   acknowledgeAlert: (alertId) => set((state) => ({ alerts: state.alerts.map((alert) => alert.id === alertId ? { ...alert, acknowledged: true } : alert) })),
   snoozeAlert: (alertId) => set((state) => ({ alerts: state.alerts.map((alert) => alert.id === alertId ? { ...alert, snoozedUntil: new Date(Date.now() + 86400000).toISOString() } : alert) })),
   addReservation: (reservation) => {
-    set((state) => ({ reservations: [reservation, ...state.reservations] }))
+    syncReservationCreate(reservation)
+    logActivity({ action: 'Reservation created', module: 'Reservations', detail: `${reservation.guestName} · ${reservation.source} · ${reservation.checkIn}` })
+    upsertLiveReservation(reservation)
+    set((state) => ({ reservations: [reservation, ...state.reservations.filter((candidate) => candidate.id !== reservation.id)] }))
     eventBus.emit({ type: 'reservation.updated', payload: { reservationId: reservation.id, status: reservation.status } })
   },
   updateReservationStatus: (reservationId, status, roomNumber) => {
-    set((state) => ({
-      reservations: state.reservations.map((reservation) => reservation.id === reservationId ? { ...reservation, status, roomNumber: roomNumber ?? reservation.roomNumber } : reservation),
-      rooms: status === 'Checked in' && roomNumber
-        ? state.rooms.map((room) => room.number === roomNumber ? { ...room, status: 'Occupied', guestName: state.reservations.find((reservation) => reservation.id === reservationId)?.guestName } : room)
-        : state.rooms,
-    }))
+    syncReservationStatus(reservationId, status, roomNumber)
+    logActivity({ action: `Reservation ${status}`, module: 'Reservations', detail: `${reservationId}${roomNumber ? ` · Room ${roomNumber}` : ''}` })
+    updateLiveReservationStatus(reservationId, status, roomNumber)
+    set((state) => {
+      const reservation = state.reservations.find((candidate) => candidate.id === reservationId)
+      let rooms = state.rooms
+      if (status === 'Checked in' && roomNumber) {
+        rooms = state.rooms.map((room) => room.number === roomNumber ? { ...room, status: 'Occupied', guestName: reservation?.guestName } : room)
+      } else if (status === 'Cancelled' || status === 'Checked out') {
+        const freedRoom = roomNumber ?? reservation?.roomNumber
+        rooms = state.rooms.map((room) => room.number === freedRoom ? { ...room, status: 'Clean', guestName: undefined } : room)
+      }
+      return {
+        reservations: state.reservations.map((candidate) => candidate.id === reservationId ? { ...candidate, status, roomNumber: roomNumber ?? candidate.roomNumber } : candidate),
+        rooms,
+      }
+    })
     eventBus.emit({ type: 'reservation.updated', payload: { reservationId, status } })
     if (status === 'Checked in' && roomNumber) eventBus.emit({ type: 'checkin.created', payload: { reservationId, guestName: get().reservations.find((reservation) => reservation.id === reservationId)?.guestName ?? 'Guest', roomNumber } })
   },
   addOrder: (order) => {
+    syncOrderCreate(order)
+    logActivity({ action: 'Order created', module: order.outlet === 'BAR' ? 'Bar' : 'Restaurant', detail: `${order.orderNumber} · ${order.type} · ${order.total}` })
     upsertLiveOrder(order)
     set((state) => ({ orders: [order, ...state.orders.filter((candidate) => candidate.id !== order.id)] }))
     eventBus.emit({ type: 'order.created', payload: { orderId: order.id, orderNumber: order.orderNumber, outlet: order.outlet } })
   },
   updateOrderStatus: (orderId, status) => {
+    syncOrderStatus(orderId, status)
+    logActivity({ action: `Order ${status}`, module: 'Kitchen', detail: orderId })
     updateLiveOrderStatus(orderId, status)
     set((state) => ({ orders: state.orders.map((order) => order.id === orderId ? { ...order, status } : order) }))
     eventBus.emit({ type: 'order.status.changed', payload: { orderId, status } })
@@ -123,9 +148,30 @@ export const useHotelStore = create<HotelState>((set, get) => ({
     const storedIds = new Set(stored.map((order) => order.id))
     return { orders: [...stored, ...state.orders.filter((order) => !storedIds.has(order.id))] }
   }),
-  addPurchaseOrder: (purchaseOrder) => set((state) => ({ purchaseOrders: [purchaseOrder, ...state.purchaseOrders] })),
-  updatePurchaseOrderStatus: (purchaseOrderId, status) => set((state) => ({ purchaseOrders: state.purchaseOrders.map((purchaseOrder) => purchaseOrder.id === purchaseOrderId ? { ...purchaseOrder, status } : purchaseOrder) })),
-  addInventoryItem: (item) => set((state) => ({ inventory: [item, ...state.inventory] })),
+  syncLiveReservations: () => set((state) => {
+    const stored = readLiveReservations()
+    const storedIds = new Set(stored.map((reservation) => reservation.id))
+    return { reservations: [...stored, ...state.reservations.filter((reservation) => !storedIds.has(reservation.id))] }
+  }),
+  hydrateFromServer: (data) => set((state) => ({
+    reservations: data.reservations ?? state.reservations,
+    rooms: data.rooms ?? state.rooms,
+    orders: data.orders ?? state.orders,
+    inventory: data.inventory ?? state.inventory,
+  })),
+  addPurchaseOrder: (purchaseOrder) => {
+    logActivity({ action: 'Purchase order created', module: 'Inventory', detail: `${purchaseOrder.poNumber} · ${purchaseOrder.supplierName} · ${purchaseOrder.total}` })
+    set((state) => ({ purchaseOrders: [purchaseOrder, ...state.purchaseOrders] }))
+  },
+  updatePurchaseOrderStatus: (purchaseOrderId, status) => {
+    logActivity({ action: `Purchase order ${status}`, module: 'Inventory', detail: purchaseOrderId })
+    set((state) => ({ purchaseOrders: state.purchaseOrders.map((purchaseOrder) => purchaseOrder.id === purchaseOrderId ? { ...purchaseOrder, status } : purchaseOrder) }))
+  },
+  addInventoryItem: (item) => {
+    logActivity({ action: 'Inventory item created', module: 'Inventory', detail: `${item.name} · ${item.sku}` })
+    set((state) => ({ inventory: [item, ...state.inventory] }))
+  },
 }))
 
 subscribeToLiveOrders(() => useHotelStore.getState().syncLiveOrders())
+subscribeToLiveReservations(() => useHotelStore.getState().syncLiveReservations())

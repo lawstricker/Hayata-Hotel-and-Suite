@@ -23,7 +23,7 @@ export function SidebarContent({ collapsed = false, onNavigate, onLogout }: Side
   return (
     <div className="flex h-full flex-col bg-sidebar text-sidebar-foreground">
       <div className={cn('flex h-17 items-center border-b border-sidebar-border px-4', collapsed ? 'justify-center px-2' : 'justify-between')}>
-        <NavLink to="/" onClick={onNavigate} className="flex min-w-0 items-center gap-3 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-400/60" aria-label="Hayata HMS home">
+        <NavLink to="/staff" onClick={onNavigate} className="flex min-w-0 items-center gap-3 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-400/60" aria-label="Hayata HMS home">
           <span className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-teal-500 text-white shadow-lg shadow-teal-950/25">
             <Hotel className="size-[18px]" aria-hidden="true" />
           </span>
@@ -55,7 +55,7 @@ export function SidebarContent({ collapsed = false, onNavigate, onLogout }: Side
                     const link = (
                       <NavLink
                         to={item.path}
-                        end={item.path === '/'}
+                        end={item.path === '/staff'}
                         onClick={onNavigate}
                         className={({ isActive }) => cn(
                           'group relative flex h-10 items-center gap-3 rounded-lg px-3 text-[13px] font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-emerald-400/50',

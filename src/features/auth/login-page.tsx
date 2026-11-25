@@ -10,6 +10,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/input'
 import { demoUsers } from '@/mock/data'
 import { useAuthStore } from '@/store/authStore'
+import { serverLogin } from '@/lib/auth-api'
 import { AuthLayout } from './auth-layout'
 
 const loginSchema = z.object({
@@ -34,9 +35,10 @@ export function LoginPage() {
     setSubmitting(true)
     setError('')
     try {
+      await serverLogin(values.email, values.password)
       const user = await login(values.email, values.password)
       toast.success(`Welcome back, ${user.name.split(' ')[0]}`, { description: 'Signed in to Hayata HMS.' })
-      navigate('/')
+      navigate('/staff')
     } catch (loginError) {
       setError(loginError instanceof Error ? loginError.message : 'Unable to sign in')
     } finally {
@@ -59,7 +61,7 @@ export function LoginPage() {
           {form.formState.errors.email && <p className="text-xs font-medium text-destructive" role="alert">{form.formState.errors.email.message}</p>}
         </div>
         <div className="space-y-2">
-          <div className="flex items-center justify-between"><Label htmlFor="password">Password</Label><Link to="/forgot-password" className="text-xs font-bold text-primary hover:underline">Forgot password?</Link></div>
+          <div className="flex items-center justify-between"><Label htmlFor="password">Password</Label><Link to="/staff/forgot-password" className="text-xs font-bold text-primary hover:underline">Forgot password?</Link></div>
           <div className="relative">
             <Input id="password" type={showPassword ? 'text' : 'password'} autoComplete="current-password" className="pr-11" aria-invalid={Boolean(form.formState.errors.password)} {...form.register('password')} />
             <button type="button" onClick={() => setShowPassword((current) => !current)} className="absolute right-1 top-1/2 flex size-8 -translate-y-1/2 items-center justify-center rounded-md text-muted-foreground hover:bg-muted" aria-label={showPassword ? 'Hide password' : 'Show password'}>{showPassword ? <EyeOff className="size-4" /> : <Eye className="size-4" />}</button>

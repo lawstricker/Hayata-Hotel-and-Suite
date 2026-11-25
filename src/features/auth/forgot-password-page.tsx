@@ -21,13 +21,13 @@ export function ForgotPasswordPage() {
           <CheckCircle2 className="mx-auto size-10 text-emerald-600" />
           <h3 className="mt-4 font-display text-lg font-bold">Check your inbox</h3>
           <p className="mt-2 text-sm text-muted-foreground">We sent password reset instructions to <span className="font-semibold text-foreground">{form.getValues('email')}</span>.</p>
-          <Button asChild variant="outline" className="mt-6"><Link to="/login"><ArrowLeft /> Back to sign in</Link></Button>
+          <Button asChild variant="outline" className="mt-6"><Link to="/staff/login"><ArrowLeft /> Back to sign in</Link></Button>
         </div>
       ) : (
         <form onSubmit={form.handleSubmit(() => setSent(true))} className="space-y-5" noValidate>
           <div className="space-y-2"><Label htmlFor="email">Work email</Label><Input id="email" type="email" autoComplete="email" {...form.register('email')} />{form.formState.errors.email && <p className="text-xs font-medium text-destructive">{form.formState.errors.email.message}</p>}</div>
           <Button type="submit" size="lg" className="w-full">Send reset link <ArrowRight /></Button>
-          <Button asChild variant="ghost" className="w-full"><Link to="/login"><ArrowLeft /> Back to sign in</Link></Button>
+          <Button asChild variant="ghost" className="w-full"><Link to="/staff/login"><ArrowLeft /> Back to sign in</Link></Button>
         </form>
       )}
     </AuthLayout>

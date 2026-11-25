@@ -26,6 +26,10 @@
   --sidebar-muted: 215 18% 64%;
   --sidebar-accent: 173 55% 23%;
   --sidebar-border: 220 25% 19%;
+  --champagne: 38 48% 56%;
+  --champagne-soft: 38 58% 91%;
+  --ink: 200 28% 10%;
+  --cream: 42 42% 97%;
 }
 
 .dark {
@@ -52,6 +56,10 @@
   --sidebar-muted: 215 16% 58%;
   --sidebar-accent: 173 38% 17%;
   --sidebar-border: 220 20% 15%;
+  --champagne: 42 62% 66%;
+  --champagne-soft: 40 28% 24%;
+  --ink: 200 30% 6%;
+  --cream: 205 20% 11%;
 }
 
 @theme inline {
@@ -78,8 +86,14 @@
   --color-sidebar-muted: hsl(var(--sidebar-muted));
   --color-sidebar-accent: hsl(var(--sidebar-accent));
   --color-sidebar-border: hsl(var(--sidebar-border));
+  --color-champagne: hsl(var(--champagne));
+  --color-champagne-soft: hsl(var(--champagne-soft));
+  --color-ink: hsl(var(--ink));
+  --color-cream: hsl(var(--cream));
   --font-sans: "DM Sans", ui-sans-serif, system-ui, sans-serif;
   --font-display: "Manrope", "DM Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-lux: "Plus Jakarta Sans", "DM Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-editorial: "Bodoni Moda", Georgia, "Times New Roman", serif;
   --shadow-card: 0 1px 2px rgb(15 23 42 / 0.03), 0 8px 24px rgb(15 23 42 / 0.035);
   --shadow-lg: 0 12px 32px rgb(15 23 42 / 0.09);
 }

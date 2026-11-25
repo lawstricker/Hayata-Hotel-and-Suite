@@ -18,7 +18,7 @@ export function useLiveSimulation(enabled = true) {
       if (event.type === 'low_stock.triggered') {
         toast.warning(`Low stock: ${event.payload.itemName}`, {
           description: `${event.payload.stock} remaining · Reorder point ${event.payload.threshold}`,
-          action: { label: 'View alerts', onClick: () => { window.location.href = '/inventory/alerts' } },
+          action: { label: 'View alerts', onClick: () => { window.location.href = '/staff/inventory/alerts' } },
         })
       }
     })

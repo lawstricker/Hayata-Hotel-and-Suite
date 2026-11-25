@@ -1,0 +1,50 @@
+export const STAFF_BASE = '/staff'
+
+export function staffPath(path = '') {
+  if (!path || path === '/') return STAFF_BASE
+  return `${STAFF_BASE}/${path.replace(/^\//, '')}`
+}
+
+export const legacyStaffRedirects: Record<string, string> = {
+  '/login': '/staff/login',
+  '/forgot-password': '/staff/forgot-password',
+  '/reset-password': '/staff/reset-password',
+  '/dashboard': '/staff/dashboard',
+  '/reservations': '/staff/reservations',
+  '/front-desk': '/staff/front-desk',
+  '/rooms/qr-menu': '/staff/rooms/qr-menu',
+  '/qr-menus': '/staff/rooms/qr-menu',
+  '/housekeeping': '/staff/housekeeping',
+  '/maintenance': '/staff/maintenance',
+  '/guests': '/staff/guests',
+  '/crm/campaigns': '/staff/crm/campaigns',
+  '/crm/feedback': '/staff/crm/feedback',
+  '/restaurant/pos': '/staff/restaurant/pos',
+  '/restaurant/tables': '/staff/restaurant/tables',
+  '/restaurant/menu': '/staff/restaurant/menu',
+  '/restaurant/orders': '/staff/restaurant/orders',
+  '/restaurant/kds': '/staff/restaurant/kds',
+  '/bar/pos': '/staff/bar/pos',
+  '/bar/tabs': '/staff/bar/tabs',
+  '/bar/kds': '/staff/bar/kds',
+  '/inventory': '/staff/inventory',
+  '/inventory/items': '/staff/inventory/items',
+  '/inventory/alerts': '/staff/inventory/alerts',
+  '/inventory/ledger': '/staff/inventory/ledger',
+  '/inventory/transfers': '/staff/inventory/transfers',
+  '/inventory/requisitions': '/staff/inventory/requisitions',
+  '/inventory/purchase-orders': '/staff/inventory/purchase-orders',
+  '/inventory/suppliers': '/staff/inventory/suppliers',
+  '/inventory/stock-take': '/staff/inventory/stock-take',
+  '/billing/folios': '/staff/billing/folios',
+  '/billing/invoices': '/staff/billing/invoices',
+  '/billing/payments': '/staff/billing/payments',
+  '/reports': '/staff/reports',
+  '/staff-management': '/staff/people',
+  '/events': '/staff/events',
+  '/settings': '/staff/settings',
+  '/settings/rbac': '/staff/settings?tab=rbac',
+  '/rbac-editor': '/staff/settings?tab=rbac',
+  '/printer-settings': '/staff/settings?tab=printer',
+  '/audit': '/staff/settings?tab=audit',
+}

@@ -21,7 +21,7 @@ export function ResetPasswordPage() {
     <AuthLayout title="Choose a new password" description="Use a strong, unique password for your Hayata account.">
       {complete ? (
         <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-6 text-center dark:border-emerald-900 dark:bg-emerald-950/40">
-          <CheckCircle2 className="mx-auto size-10 text-emerald-600" /><h3 className="mt-4 font-display text-lg font-bold">Password updated</h3><p className="mt-2 text-sm text-muted-foreground">Your password has been changed securely.</p><Button asChild className="mt-6"><Link to="/login">Continue to sign in <ArrowRight /></Link></Button>
+          <CheckCircle2 className="mx-auto size-10 text-emerald-600" /><h3 className="mt-4 font-display text-lg font-bold">Password updated</h3><p className="mt-2 text-sm text-muted-foreground">Your password has been changed securely.</p><Button asChild className="mt-6"><Link to="/staff/login">Continue to sign in <ArrowRight /></Link></Button>
         </div>
       ) : (
         <form onSubmit={form.handleSubmit(() => setComplete(true))} className="space-y-5" noValidate>

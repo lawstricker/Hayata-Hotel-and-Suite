@@ -7,6 +7,7 @@ import { Input, Label } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
 import { StatusPill } from '@/components/common/status-pill'
 import { flushQueuedPrints } from '@/lib/print-queue'
+import { logActivity } from '@/lib/activity-log'
 import { buildTestReceipt, sendPrintJob } from '@/lib/thermal-printer'
 import { usePrinterStore, type PrintJob, type PrinterSettings } from '@/store/printerStore'
 import { formatDate } from '@/lib/utils'
@@ -111,7 +112,7 @@ export function KitchenPrinterSettings() {
 
           <div className="flex flex-col gap-2 sm:flex-row">
             <Button variant="outline" onClick={testPrint} disabled={testing}><Wifi /> {testing ? 'Sending test…' : 'Send test print'}</Button>
-            <Button onClick={() => toast.success('Printer settings saved')}><CheckCircle2 /> Save settings</Button>
+            <Button onClick={() => { logActivity({ action: 'Printer settings updated', module: 'Settings', detail: `${settings.bridgeHost}:${settings.bridgePort}` }); toast.success('Printer settings saved') }}><CheckCircle2 /> Save settings</Button>
           </div>
         </CardContent>
       </Card>

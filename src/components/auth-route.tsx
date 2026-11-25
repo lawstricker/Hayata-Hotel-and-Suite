@@ -8,7 +8,7 @@ import { UnauthorizedPage } from '@/features/error/unauthorized-page'
 export function RequireAuth() {
   const user = useAuthStore((state) => state.user)
   const location = useLocation()
-  if (!user) return <Navigate to="/login" state={{ from: location.pathname }} replace />
+  if (!user) return <Navigate to="/staff/login" state={{ from: location.pathname }} replace />
   return <Outlet />
 }
 
@@ -16,7 +16,7 @@ export function PermissionRoute({ permission, children }: { permission: Permissi
   const role = useAuthStore((state) => state.user?.role)
   const permissionsByRole = useRbacStore((state) => state.permissions)
   const rolePermissions = role ? permissionsByRole[role] : []
-  if (!role) return <Navigate to="/login" replace />
+  if (!role) return <Navigate to="/staff/login" replace />
   if (!rolePermissions.includes(permission)) return <UnauthorizedPage />
   return <>{children}</>
 }

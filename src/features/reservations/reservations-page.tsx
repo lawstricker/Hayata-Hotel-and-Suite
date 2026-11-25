@@ -26,7 +26,7 @@ const reservationSchema = z.object({
   checkOut: z.string().min(1, 'Select departure date'),
   adults: z.number().int().min(1, 'At least one adult'),
   children: z.number().int().min(0),
-  source: z.enum(['Direct', 'Booking.com', 'Expedia', 'Corporate', 'Walk-in']),
+  source: z.enum(['Direct', 'Booking.com', 'Expedia', 'Corporate', 'Walk-in', 'ONLINE']),
   ratePlan: z.string().min(1),
   deposit: z.number().min(0),
 })
@@ -71,7 +71,7 @@ function CreateReservationDialog({ open, onOpenChange }: { open: boolean; onOpen
         <form onSubmit={form.handleSubmit(submit)} className="grid gap-4 sm:grid-cols-2" noValidate>
           <div className="space-y-1.5 sm:col-span-2"><Label>Guest</Label><select {...form.register('guestId')} className="h-10 w-full rounded-lg border border-input bg-background px-3 text-sm"><option value="">Search guest directory</option>{guests.map((guest) => <option key={guest.id} value={guest.id}>{guest.firstName} {guest.lastName} · {guest.email}</option>)}</select>{form.formState.errors.guestId && <p className="text-xs text-destructive">{form.formState.errors.guestId.message}</p>}</div>
           <div className="space-y-1.5"><Label>Room type</Label><select {...form.register('roomType')} className="h-10 w-full rounded-lg border border-input bg-background px-3 text-sm"><option value="">Select room type</option>{roomTypes.map((type) => <option key={type.id}>{type.name}</option>)}</select>{form.formState.errors.roomType && <p className="text-xs text-destructive">{form.formState.errors.roomType.message}</p>}</div>
-          <div className="space-y-1.5"><Label>Booking source</Label><select {...form.register('source')} className="h-10 w-full rounded-lg border border-input bg-background px-3 text-sm"><option>Direct</option><option>Booking.com</option><option>Expedia</option><option>Corporate</option><option>Walk-in</option></select></div>
+          <div className="space-y-1.5"><Label>Booking source</Label><select {...form.register('source')} className="h-10 w-full rounded-lg border border-input bg-background px-3 text-sm"><option>Direct</option><option>Booking.com</option><option>Expedia</option><option>Corporate</option><option>Walk-in</option><option value="ONLINE">Online / Website</option></select></div>
           <div className="space-y-1.5"><Label>Arrival</Label><Input type="date" {...form.register('checkIn')} /></div>
           <div className="space-y-1.5"><Label>Departure</Label><Input type="date" {...form.register('checkOut')} /></div>
           <div className="space-y-1.5"><Label>Adults</Label><Input type="number" {...form.register('adults', { valueAsNumber: true })} /></div>
@@ -120,7 +120,7 @@ export function ReservationsPage() {
     { key: 'checkIn', header: 'Arrival', sortable: true, cell: (row) => <span className="text-xs font-semibold">{format(new Date(`${row.checkIn}T00:00:00`), 'MMM d, yyyy')}</span> },
     { key: 'checkOut', header: 'Departure', cell: (row) => <span className="text-xs text-muted-foreground">{format(new Date(`${row.checkOut}T00:00:00`), 'MMM d')}</span> },
     { key: 'status', header: 'Status', cell: (row) => <StatusPill status={row.status} /> },
-    { key: 'source', header: 'Source', hideOnMobile: true, cell: (row) => <Badge variant="outline">{row.source}</Badge> },
+    { key: 'source', header: 'Source', hideOnMobile: true, cell: (row) => <div className="flex items-center gap-1.5"><Badge variant={row.source === 'ONLINE' ? 'info' : 'outline'}>{row.source === 'ONLINE' ? 'Website' : row.source}</Badge>{row.channel === 'WEBSITE' && <span className="text-[9px] font-bold uppercase text-primary">online</span>}</div> },
     { key: 'total', header: 'Total', align: 'right', cell: (row) => <span className="text-xs font-bold">{formatCurrency(row.total)}</span> },
     { key: 'actions', header: 'Actions', align: 'right', cell: (row) => row.status === 'Confirmed' || row.status === 'Pending' ? <Button size="sm" onClick={() => setCheckInReservation(row)}><LogIn /> Check in</Button> : row.status === 'Checked in' ? <Button size="sm" variant="outline" onClick={() => { updateStatus(row.id, 'Checked out'); toast.success('Guest checked out', { description: 'Room departure and folio review completed.' }) }}><DoorOpen /> Check out</Button> : row.status !== 'Cancelled' ? <Button size="sm" variant="ghost" onClick={() => { updateStatus(row.id, 'Cancelled'); toast.success('Reservation cancelled') }}><XCircle /> Cancel</Button> : <span className="text-xs text-muted-foreground">—</span> },
   ]

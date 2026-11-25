@@ -81,6 +81,40 @@ By default it listens on port `8787` and forwards to `127.0.0.1:9100`. Configure
 
 In **Settings → Kitchen printer**, enter the bridge IP/hostname and port that the guest device can reach, plus the thermal printer’s local IP and port. Use an HTTPS reverse proxy on the bridge when the app is deployed over HTTPS; browsers block mixed-content requests from HTTPS pages to plain HTTP hosts.
 
+### XAMPP database and PHP API
+
+The project ships with a PDO-backed PHP REST API in `server/php/`. It has been deployed to `C:\xampp\htdocs\hayata-api` and connects to the `hayata_data` MySQL database using XAMPP’s default `root` account with no password.
+
+To recreate the database and seed data:
+
+```powershell
+& "C:\xampp\php\php.exe" "server\php\setup.php"
+Copy-Item "server\php\*" "C:\xampp\htdocs\hayata-api" -Force
+```
+
+The frontend tries the API first and falls back to the in-browser mock data if the API is unavailable. Configure it with `.env`:
+
+```env
+VITE_API_BASE_URL=http://localhost/hayata-api/api.php
+VITE_USE_SERVER=true
+```
+
+The API provides:
+
+- `POST /auth/login`, `GET /auth/me`, `GET /bootstrap`
+- Public room types, availability, quote, booking create/pay/lookup/cancel, enquiries and newsletter
+- Generic CRUD for all seeded domain tables
+- Reservation, order and inventory status transitions
+- Bearer-token authentication with role and permission checks
+
+All demo users are seeded into MySQL with the password `demo123`. Public bookings are written to MySQL and mirrored into the staff store so they appear immediately in Reservations and Front Desk.
+
+### Payment gateway and activity logs
+
+`Settings → Payment gateway` stores provider/API credentials and gateway mode under `hayata-hms-payment`. Room reservations and restaurant/bar POS checkouts authorise payments through this configured gateway before confirming the booking or order. Cards ending in `0000` can be used to test a declined payment. No real charge or external payment request is made.
+
+Staff actions (reservations, orders, inventory, staff changes, settings, RBAC and payments) are recorded in `Settings → Audit log` and persisted under `hayata-hms-activity`, with mirrored records written to the MySQL `audit_logs` table when the API is available.
+
 ## Demo credentials
 
 Every account uses the password **`demo123`**.
@@ -207,7 +241,10 @@ The event bus in `src/mock/eventBus.ts` emits `stock.level.changed`, `low_stock.
 - All financial values use Nigerian Naira (`NGN`, `₦`) across dashboards, POS, inventory, billing, reports, events, CRM, and audit activity.
 - The mock session is stored under `hayata-hms-session` in local storage.
 - Printer settings and queued tickets are stored under `hayata-hms-printer`.
+- The PHP API bearer token is stored under `hayata-api-token`; public bookings and drafts use `hayata-public-bookings` and `hayata-public-booking`.
+- Payment settings/transactions use `hayata-hms-payment`; activity history uses `hayata-hms-activity`.
 - Edited RBAC permissions are stored under `hayata-hms-rbac`; clearing that key restores the default role matrix.
 - In-room QR codes resolve to `/room/:roomNumber/menu` and identify only the room. The printed code does not change at checkout; it activates again when the next guest checks into that room.
 - Guest QR orders are mirrored to browser storage so kitchen displays in other tabs of the same browser receive them. A deployed backend would be required for orders from a guest’s own phone on a different device.
+- Online bookings are mirrored under `hayata-hms-live-reservations` so they survive refreshes and appear in staff Reservations and Front Desk.
 - No real payment, email, barcode scanner, or backend service is contacted.

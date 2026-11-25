@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 
-export function NotFoundPage() {
+export function NotFoundPage({ homePath = '/' }: { homePath?: string }) {
   return (
     <div className="flex min-h-[calc(100vh-180px)] items-center justify-center">
       <Card className="max-w-lg p-8 text-center sm:p-10">
@@ -11,7 +11,7 @@ export function NotFoundPage() {
         <p className="mt-5 font-display text-5xl font-extrabold tracking-tight text-primary">404</p>
         <h1 className="mt-2 font-display text-2xl font-extrabold">Page not found</h1>
         <p className="mt-3 text-sm text-muted-foreground">The page you’re looking for doesn’t exist or has moved.</p>
-        <Button asChild className="mt-7"><Link to="/"><ArrowLeft /> Return to dashboard</Link></Button>
+        <Button asChild className="mt-7"><Link to={homePath}><ArrowLeft /> {homePath.startsWith('/staff') ? 'Return to staff home' : 'Return home'}</Link></Button>
       </Card>
     </div>
   )

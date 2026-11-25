@@ -40,7 +40,7 @@ export function InventoryOverviewPage() {
     <div className="space-y-6">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div><div className="mb-1 flex items-center gap-2"><p className="text-xs font-bold uppercase tracking-[0.14em] text-primary">Store & inventory</p><LiveIndicator /></div><h1 className="font-display text-2xl font-extrabold tracking-tight sm:text-[28px]">Inventory command center</h1><p className="mt-1 text-sm text-muted-foreground">Live stock position across store, restaurant, bar and housekeeping.</p></div>
-        <div className="flex flex-wrap gap-2"><Button variant="outline" onClick={() => window.location.reload()}><RefreshCw /> Sync</Button><Button asChild><a href="/inventory/items"><Plus /> New item</a></Button></div>
+        <div className="flex flex-wrap gap-2"><Button variant="outline" onClick={() => window.location.reload()}><RefreshCw /> Sync</Button><Button asChild><a href="/staff/inventory/items"><Plus /> New item</a></Button></div>
       </div>
 
       <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-5">
@@ -77,14 +77,14 @@ export function InventoryOverviewPage() {
         <Card>
           <CardHeader className="flex-row items-start justify-between space-y-0"><div><CardTitle>Critical alerts</CardTitle><CardDescription>Items requiring immediate action</CardDescription></div><LiveIndicator /></CardHeader>
           <CardContent className="space-y-2.5">
-            {alerts.filter((alert) => alert.type === 'critical').slice(0, 5).map((alert) => <div key={alert.id} className="flex items-center gap-3 rounded-lg border border-red-100 bg-red-50/50 p-3 dark:border-red-900/60 dark:bg-red-950/20"><span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-red-100 text-red-600 dark:bg-red-900/60"><AlertTriangle className="size-4" /></span><div className="min-w-0 flex-1"><p className="truncate text-xs font-bold">{alert.itemName}</p><p className="text-[10px] text-muted-foreground">{alert.currentStock} of {alert.threshold} remaining</p></div><Button asChild size="sm" variant="outline"><a href="/inventory/purchase-orders"><ShoppingCart /></a></Button></div>)}
-            <Button asChild variant="ghost" className="w-full"><a href="/inventory/alerts">View all alerts <ArrowRight /></a></Button>
+            {alerts.filter((alert) => alert.type === 'critical').slice(0, 5).map((alert) => <div key={alert.id} className="flex items-center gap-3 rounded-lg border border-red-100 bg-red-50/50 p-3 dark:border-red-900/60 dark:bg-red-950/20"><span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-red-100 text-red-600 dark:bg-red-900/60"><AlertTriangle className="size-4" /></span><div className="min-w-0 flex-1"><p className="truncate text-xs font-bold">{alert.itemName}</p><p className="text-[10px] text-muted-foreground">{alert.currentStock} of {alert.threshold} remaining</p></div><Button asChild size="sm" variant="outline"><a href="/staff/inventory/purchase-orders"><ShoppingCart /></a></Button></div>)}
+            <Button asChild variant="ghost" className="w-full"><a href="/staff/inventory/alerts">View all alerts <ArrowRight /></a></Button>
           </CardContent>
         </Card>
       </div>
 
       <Card>
-        <CardHeader className="flex-row items-start justify-between space-y-0"><div><CardTitle>Recent stock movements</CardTitle><CardDescription>Every quantity change is audit-traceable</CardDescription></div><Button asChild variant="outline" size="sm"><a href="/inventory/ledger">Full ledger <ArrowRight /></a></Button></CardHeader>
+        <CardHeader className="flex-row items-start justify-between space-y-0"><div><CardTitle>Recent stock movements</CardTitle><CardDescription>Every quantity change is audit-traceable</CardDescription></div><Button asChild variant="outline" size="sm"><a href="/staff/inventory/ledger">Full ledger <ArrowRight /></a></Button></CardHeader>
         <CardContent><DataTable data={movements.slice(0, 8)} columns={movementColumns} searchPlaceholder="Search SKU or reference…" searchKeys={[(row) => row.itemName, (row) => row.sku, (row) => row.reference]} pageSize={8} filename="stock-movements.csv" /></CardContent>
       </Card>
     </div>

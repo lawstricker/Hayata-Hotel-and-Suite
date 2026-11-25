@@ -2,12 +2,14 @@ import { Command } from 'cmdk'
 import { BedDouble, Boxes, CalendarDays, ReceiptText, Search, Users } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { guests, inventoryItems, orders, reservations } from '@/mock/data'
+import { guests, inventoryItems, orders } from '@/mock/data'
+import { useHotelStore } from '@/store/hotelStore'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 
 export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
   const [query, setQuery] = useState('')
   const navigate = useNavigate()
+  const reservations = useHotelStore((state) => state.reservations)
 
   const groups = useMemo(() => {
     const normalized = query.toLowerCase().trim()
@@ -20,7 +22,7 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
           id: guest.id,
           label: `${guest.firstName} ${guest.lastName}`,
           detail: `${guest.email} · ${guest.segment}`,
-          path: `/guests/${guest.id}`,
+          path: `/staff/guests/${guest.id}`,
         })),
       },
       {
@@ -30,7 +32,7 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
           id: reservation.id,
           label: `${reservation.guestName} · ${reservation.id.toUpperCase()}`,
           detail: `${reservation.checkIn} → ${reservation.checkOut} · ${reservation.status}`,
-          path: '/reservations',
+          path: '/staff/reservations',
         })),
       },
       {
@@ -40,7 +42,7 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
           id: item.id,
           label: item.name,
           detail: `${item.sku} · ${item.stock} ${item.unit} · ${item.outlet}`,
-          path: '/inventory/items',
+          path: '/staff/inventory/items',
         })),
       },
       {
@@ -50,11 +52,11 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
           id: order.id,
           label: `${order.orderNumber} · ${order.outlet === 'BAR' ? 'Bar' : 'Restaurant'}`,
           detail: `${order.tableName ?? order.type} · ${order.status} · ₦${order.total.toFixed(2)}`,
-          path: order.outlet === 'BAR' ? '/bar/pos' : '/restaurant/orders',
+          path: order.outlet === 'BAR' ? '/staff/bar/pos' : '/staff/restaurant/orders',
         })),
       },
     ].filter((group) => group.items.length)
-  }, [query])
+  }, [query, reservations])
 
   function select(path: string) {
     navigate(path)
