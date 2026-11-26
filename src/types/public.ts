@@ -123,6 +123,20 @@ export interface PublicEnquiry {
   message: string
 }
 
+/**
+ * The stay behind a room's permanent in-room QR code.
+ *
+ * The code identifies the room only, so the stay is whichever guest is checked
+ * in to that room right now.
+ */
+export interface PublicRoomStay {
+  roomNumber: string
+  guestName: string
+  email?: string
+  checkIn?: string
+  checkOut?: string
+}
+
 export interface ApiError {
   error: string
   code: 'CONFLICT' | 'NOT_FOUND' | 'VALIDATION' | 'EMAIL_MISMATCH' | 'POLICY'

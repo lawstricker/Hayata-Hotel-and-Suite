@@ -87,7 +87,7 @@ function QrRoomCard({ room, activeStay }: { room: Room; activeStay?: Reservation
           <QRCodeCanvas ref={canvasRef} value={url} size={148} level="M" marginSize={2} bgColor="#ffffff" fgColor="#0f766e" title={`In-room dining QR for room ${room.number}`} />
         </div>
         <div className="rounded-lg bg-muted/50 p-3">
-          <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">QR destination</p>
+          <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">Permanent room URL</p>
           <p className="mt-1 truncate font-mono text-[11px]">{url}</p>
           <p className={cn('mt-1 text-[11px] font-semibold', activeStay ? 'text-primary' : 'text-muted-foreground')}>
             {activeStay ? `${activeStay.guestName} is currently checked in` : 'Ready for the next guest'}
@@ -214,7 +214,7 @@ export function RoomMenuQrPage() {
 
   const activeStays = reservations.filter((reservation) => reservation.status === 'Checked in' && Boolean(reservation.roomNumber))
   const roomOrders = orders.filter((order) => order.source === 'ROOM_SERVICE')
-  const stayForRoom = (roomNumber: string) => activeStays.find((reservation) => reservation.roomNumber === roomNumber)
+  const stayForRoom = (roomNumber: string) => activeStays.find((reservation) => reservation.roomNumber?.toUpperCase() === roomNumber.trim().toUpperCase())
 
   const filteredRooms = rooms.filter((room) => {
     if (filter === 'Occupied') return Boolean(stayForRoom(room.number))
@@ -236,7 +236,7 @@ export function RoomMenuQrPage() {
         breadcrumbs={[{ label: 'Hotel operations' }, { label: 'In-room QR menus' }]}
         actions={<>
           <Button variant="outline" size="sm" asChild><Link to="/staff/restaurant/kds"><ChefHat /> Kitchen requests</Link></Button>
-          <Button variant="ghost" size="sm" onClick={() => toast.info('How it works', { description: 'The code points to the room number only. When a guest checks in, that room’s menu becomes active automatically without replacing the card. Orders are sent to the kitchen as room-service tickets.' })}>How it works</Button>
+          <Button variant="ghost" size="sm" onClick={() => toast.info('How it works', { description: 'The code points to the room number only. When a guest checks in, that room’s menu becomes active automatically without replacing the card. The card is only changed when a new code is created for the room or the room URL is modified. Orders are sent to the kitchen as room-service tickets.' })}>How it works</Button>
           <Button size="sm" onClick={() => setCreateOpen(true)}><QrCode /> Create QR codes</Button>
         </>}
       />
@@ -254,7 +254,7 @@ export function RoomMenuQrPage() {
             <div className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-primary text-primary-foreground"><QrCode className="size-4" /></div>
             <div>
               <p className="text-sm font-bold">Permanent room code</p>
-              <p className="text-xs text-muted-foreground">The QR never changes at checkout. It activates for the next checked-in guest in that room and stops working while the room is vacant.</p>
+              <p className="text-xs text-muted-foreground">The QR never changes at checkout. It activates for the next checked-in guest in that room and stops working while the room is vacant. It is only replaced when a new code is created for the room or the room URL is modified.</p>
             </div>
           </div>
           <StatusPill status="Active" />

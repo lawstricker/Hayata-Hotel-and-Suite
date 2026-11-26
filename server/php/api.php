@@ -787,7 +787,7 @@ if (preg_match('#^/public/bookings/([^/]+)/cancel$#', $route, $matches) && $meth
  */
 function h_room_stay(PDO $pdo, string $roomNumber): array {
     $statement = $pdo->prepare(
-        "SELECT r.id, r.guest_name, r.room_number, g.email
+        "SELECT r.id, r.guest_name, r.room_number, r.check_in, r.check_out, g.email
          FROM reservations r
          LEFT JOIN guests g ON g.id = r.guest_id
          WHERE r.status = 'Checked in' AND r.room_number = :room
@@ -797,6 +797,23 @@ function h_room_stay(PDO $pdo, string $roomNumber): array {
     $stay = $statement->fetch();
     if (!$stay) h_error('This in-room dining code is not linked to an active stay.', 'ROOM_UNAVAILABLE', 403);
     return $stay;
+}
+
+/**
+ * The stay behind a room's permanent in-room QR code.
+ *
+ * The code identifies the room only, so the guest sees the stay that is checked
+ * in to that room right now, whichever guest that is.
+ */
+function h_public_room_stay(PDO $pdo, string $roomNumber): array {
+    $stay = h_room_stay($pdo, $roomNumber);
+    return [
+        'roomNumber' => (string) $stay['room_number'],
+        'guestName' => (string) $stay['guest_name'],
+        'email' => (string) ($stay['email'] ?? ''),
+        'checkIn' => (string) ($stay['check_in'] ?? ''),
+        'checkOut' => (string) ($stay['check_out'] ?? ''),
+    ];
 }
 
 /**
@@ -872,6 +889,13 @@ if ($route === '/public/menu' && $method === 'GET') {
          FROM menu_items WHERE available = 1 ORDER BY category, name'
     );
     hayata_json(h_normalize_menu_items(h_decode_rows($statement->fetchAll())));
+}
+
+// The stay behind a room's permanent in-room QR code.
+if ($route === '/public/room-orders/stay' && $method === 'GET') {
+    $roomNumber = strtoupper(trim((string) ($query['room'] ?? '')));
+    if ($roomNumber === '') h_error('Room number is required.', 'VALIDATION');
+    hayata_json(h_public_room_stay($pdo, $roomNumber));
 }
 
 // Guest in-room dining: quote the basket before the guest pays.
@@ -1005,7 +1029,14 @@ if (preg_match('#^/reservations/([^/]+)/status$#', $route, $matches) && $method 
     hayata_require_permission($pdo, 'reservation.edit');
     $id = $matches[1];
     $status = (string) ($body['status'] ?? 'Confirmed');
-    h_update($pdo, 'reservations', $id, ['status' => $status, 'room_number' => $body['roomNumber'] ?? null]);
+
+    // The room is only replaced when one is sent. A check-out that carried no
+    // room number used to erase the room from the reservation, which lost the
+    // link between the stay and the folio.
+    $updates = ['status' => $status];
+    if (!empty($body['roomNumber'])) $updates['room_number'] = $body['roomNumber'];
+    h_update($pdo, 'reservations', $id, $updates);
+
     if ($status === 'Checked in' && !empty($body['roomNumber'])) {
         $statement = $pdo->prepare('SELECT guest_name FROM reservations WHERE id = :id');
         $statement->execute(['id' => $id]);
@@ -1013,6 +1044,23 @@ if (preg_match('#^/reservations/([^/]+)/status$#', $route, $matches) && $method 
         $roomStatement = $pdo->prepare('UPDATE rooms SET status = \'Occupied\', guest_name = :guest WHERE number = :number');
         $roomStatement->execute(['guest' => $guestName, 'number' => $body['roomNumber']]);
     }
+
+    // A checked-out guest frees the room again, so the permanent QR code of
+    // that room goes inactive until the next guest checks in.
+    if ($status === 'Checked out' || $status === 'Cancelled') {
+        $statement = $pdo->prepare('SELECT room_number FROM reservations WHERE id = :id');
+        $statement->execute(['id' => $id]);
+        $roomNumber = (string) $statement->fetchColumn();
+        if ($roomNumber !== '') {
+            $others = $pdo->prepare("SELECT COUNT(*) FROM reservations WHERE room_number = :room AND status = 'Checked in' AND id <> :id");
+            $others->execute(['room' => $roomNumber, 'id' => $id]);
+            if ((int) $others->fetchColumn() === 0) {
+                $roomStatement = $pdo->prepare('UPDATE rooms SET status = \'Clean\', guest_name = NULL WHERE number = :number');
+                $roomStatement->execute(['number' => $roomNumber]);
+            }
+        }
+    }
+
     // The guest is notified about the stay, never about internal changes.
     $notification = ['sent' => false, 'skipped' => true];
     if ($status === 'Checked in') $notification = hayata_notify_reservation_event($pdo, 'checked_in', $id);

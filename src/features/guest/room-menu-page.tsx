@@ -9,7 +9,7 @@ import { Card, CardContent } from '@/components/ui/card'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Input, Label, Textarea } from '@/components/ui/input'
 import { StatusPill } from '@/components/common/status-pill'
-import { findActiveRoomStay } from '@/lib/room-menu'
+import { findActiveRoomStay, fetchActiveRoomStay, type ActiveRoomStay } from '@/lib/room-menu'
 import { fetchPublicMenu } from '@/lib/menu-api'
 import { fetchRoomOrderQuote, placePaidRoomOrder, toRoomOrderLines, type RoomOrderQuote } from '@/lib/room-orders'
 import { processPayment, recordTransaction, reversePayment } from '@/lib/payment-gateway'
@@ -37,11 +37,28 @@ function UnavailableRoom({ roomNumber }: { roomNumber: string }) {
           <div>
             <h1 className="font-display text-xl font-extrabold">Menu unavailable</h1>
             <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
-              Code for room {roomNumber || '—'} is not linked to an active checked-in stay. Please ask reception to issue a fresh in-room dining code.
+              Room {roomNumber || '—'} has no checked-in guest right now, so the kitchen menu is closed. The code in your room does not change: it opens again as soon as the next guest checks in.
             </p>
           </div>
           <div className="rounded-lg border border-dashed border-border bg-muted/35 p-3 text-left text-[11px] text-muted-foreground">
-            Scan the QR card placed in your room. A new code is generated automatically each time you check in.
+            <p className="font-bold text-foreground">The QR card in your room is permanent.</p>
+            <p className="mt-1">It is only replaced when a new code is created for the room or the room link is updated. Please ask reception if you need help.</p>
+          </div>
+        </CardContent>
+      </Card>
+    </div>
+  )
+}
+
+function OpeningMenu() {
+  return (
+    <div className="flex min-h-screen items-center justify-center bg-background px-4">
+      <Card className="w-full max-w-md border-border bg-card shadow-card">
+        <CardContent className="space-y-4 p-8 text-center">
+          <div className="mx-auto flex size-14 items-center justify-center rounded-2xl bg-muted text-muted-foreground"><Loader2 className="size-6 animate-spin" /></div>
+          <div>
+            <h1 className="font-display text-xl font-extrabold">Opening the menu</h1>
+            <p className="mt-2 text-sm leading-relaxed text-muted-foreground">We are checking that your room is checked in.</p>
           </div>
         </CardContent>
       </Card>
@@ -78,10 +95,32 @@ export function RoomMenuPage() {
 
   const gatewaySettings = usePaymentGatewayStore((state) => state.settings)
 
-  const stay = useMemo(
+  const localStay = useMemo(
     () => findActiveRoomStay(rooms, reservations, roomNumber),
     [rooms, reservations, roomNumber],
   )
+
+  // The guest is not signed in, so the stay is resolved from the API. The
+  // permanent code identifies the room only: whichever guest is checked in to
+  // that room is the one the menu belongs to.
+  const [resolvedStay, setResolvedStay] = useState<{ roomNumber: string; stay: ActiveRoomStay | null } | null>(null)
+  useEffect(() => {
+    let active = true
+    fetchActiveRoomStay(roomNumber)
+      .then((stay) => {
+        if (active) setResolvedStay({ roomNumber, stay })
+      })
+      .catch(() => {
+        if (active) setResolvedStay({ roomNumber, stay: null })
+      })
+    return () => { active = false }
+  }, [roomNumber])
+
+  const serverStay = resolvedStay?.roomNumber === roomNumber ? resolvedStay.stay : null
+  const stayResolved = resolvedStay?.roomNumber === roomNumber
+  // The server decides once it has answered; the in-browser mirror only fills
+  // the gap while the request is still running.
+  const activeStay = stayResolved ? serverStay : localStay
 
   // The guest menu is served by the API so it matches the restaurant menu the
   // kitchen maintains. The bundled menu is only a fallback when the API is down.
@@ -109,23 +148,26 @@ export function RoomMenuPage() {
   const tax = Math.round(subtotal * 0.08 * 100) / 100
   const total = Math.round((subtotal + tax) * 100) / 100
   const itemCount = cart.reduce((sum, line) => sum + line.quantity, 0)
-  const roomOrders = stay ? orders.filter((order) => order.roomNumber === stay.room.number && order.source === 'ROOM_SERVICE') : []
+  const roomOrders = activeStay ? orders.filter((order) => order.roomNumber === activeStay.room.number && order.source === 'ROOM_SERVICE') : []
 
   // The server prices the basket; the local totals are only a fallback when the API is unreachable.
   const amountDue = quote ? quote.total : total
 
   const guestEmail = useMemo(() => {
-    if (!stay) return ''
-    const match = guests.find((guest) => guest.id === stay.reservation.guestId)
+    if (!activeStay) return ''
+    if (activeStay.email) return activeStay.email
+    const match = guests.find((guest) => guest.id === activeStay.reservation.guestId)
     return match?.email ?? ''
-  }, [stay])
+  }, [activeStay])
 
   // The guest can change the receipt address; otherwise we use the one on file.
   const email = emailOverride || quote?.email || guestEmail
 
-  if (!stay) return <UnavailableRoom roomNumber={roomNumber} />
+  if (!activeStay) {
+    return stayResolved ? <UnavailableRoom roomNumber={roomNumber} /> : <OpeningMenu />
+  }
 
-  const guestFirstName = stay.reservation.guestName.split(' ')[0] ?? 'Guest'
+  const guestFirstName = activeStay.reservation.guestName.split(' ')[0] ?? 'Guest'
 
   function addToCart(item: MenuItem) {
     setCart((current) => {
@@ -156,7 +198,7 @@ export function RoomMenuPage() {
     setQuoteOffline(false)
     setQuoteLoading(true)
     try {
-      const priced = await fetchRoomOrderQuote(stay!.room.number, toRoomOrderLines(cart))
+      const priced = await fetchRoomOrderQuote(activeStay.room.number, toRoomOrderLines(cart))
       setQuote(priced)
     } catch (error) {
       const apiError = error as { status?: number; message?: string }
@@ -185,7 +227,7 @@ export function RoomMenuPage() {
    * can never reach the kitchen display.
    */
   async function payAndPlaceOrder() {
-    if (!stay || !cart.length || paying) return
+    if (!activeStay || !cart.length || paying) return
     if (!/^\S+@\S+\.\S+$/.test(email.trim())) {
       toast.error('Enter the email address for your receipt', { description: 'We use it to send your order confirmation.' })
       return
@@ -200,7 +242,7 @@ export function RoomMenuPage() {
       const paymentRequest = {
         amount: amountDue,
         email: email.trim(),
-        description: `In-room dining · room ${stay.room.number}`,
+        description: `In-room dining · room ${activeStay.room.number}`,
         referenceHint: 'RS',
         method: 'Card' as const,
         card,
@@ -220,8 +262,8 @@ export function RoomMenuPage() {
         type: 'Room service',
         status: 'New',
         items: cart,
-        guestName: stay.reservation.guestName,
-        roomNumber: stay.room.number,
+        guestName: activeStay.reservation.guestName,
+        roomNumber: activeStay.room.number,
         server: 'In-room dining',
         createdAt: new Date().toISOString(),
         subtotal,
@@ -239,7 +281,7 @@ export function RoomMenuPage() {
       let persisted = false
       try {
         const result = await placePaidRoomOrder({
-          roomNumber: stay.room.number,
+          roomNumber: activeStay.room.number,
           items: toRoomOrderLines(cart),
           instructions: notes.trim() || undefined,
           email: email.trim(),
@@ -282,7 +324,7 @@ export function RoomMenuPage() {
       toast.success('Payment received · order sent to the kitchen', { description: `${order.orderNumber} · ETA ${eta} min` })
       void dispatchKitchenPrint(
         order,
-        { roomNumber: stay.room.number, guestName: stay.reservation.guestName },
+        { roomNumber: activeStay.room.number, guestName: activeStay.reservation.guestName },
         printerSettings,
         enqueuePrintJob,
       ).then((result) => {
@@ -306,7 +348,7 @@ export function RoomMenuPage() {
             </div>
           </div>
           <div className="text-right">
-            <p className="text-xs font-extrabold">Room {stay.room.number}</p>
+            <p className="text-xs font-extrabold">Room {activeStay.room.number}</p>
             <p className="text-[10px] text-muted-foreground">{guestFirstName}</p>
           </div>
         </div>
@@ -357,7 +399,7 @@ export function RoomMenuPage() {
               <p className="text-xs font-bold uppercase tracking-[0.16em] text-primary">{greeting()}, {guestFirstName}</p>
               <h1 className="mt-1 font-display text-2xl font-extrabold tracking-tight sm:text-3xl">What would you like from the kitchen?</h1>
               <p className="mt-2 max-w-xl text-sm leading-relaxed text-muted-foreground">
-                Freshly prepared by Hayata Kitchen and delivered to room {stay.room.number}. Pay for your order before it reaches the kitchen.
+                Freshly prepared by Hayata Kitchen and delivered to room {activeStay.room.number}. Pay for your order before it reaches the kitchen.
               </p>
             </section>
 
@@ -500,7 +542,7 @@ export function RoomMenuPage() {
                 <div className="flex items-center justify-between rounded-xl border border-primary/25 bg-primary/5 p-4">
                   <div>
                     <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-muted-foreground">Amount to pay</p>
-                    <p className="mt-0.5 text-[11px] text-muted-foreground">{itemCount} {itemCount === 1 ? 'item' : 'items'} · room {stay.room.number}</p>
+                    <p className="mt-0.5 text-[11px] text-muted-foreground">{itemCount} {itemCount === 1 ? 'item' : 'items'} · room {activeStay.room.number}</p>
                   </div>
                   <p className="font-display text-2xl font-extrabold text-primary">
                     {quoteLoading ? <Loader2 className="size-6 animate-spin" /> : formatCurrency(amountDue)}
@@ -526,7 +568,7 @@ export function RoomMenuPage() {
                 <div className="grid gap-3 sm:grid-cols-2">
                   <div className="space-y-1.5 sm:col-span-2">
                     <Label htmlFor="room-card-name">Name on card</Label>
-                    <Input id="room-card-name" value={card.name} onChange={(event) => setCard({ ...card, name: event.target.value })} placeholder={stay.reservation.guestName} autoComplete="cc-name" />
+                    <Input id="room-card-name" value={card.name} onChange={(event) => setCard({ ...card, name: event.target.value })} placeholder={activeStay.reservation.guestName} autoComplete="cc-name" />
                   </div>
                   <div className="space-y-1.5 sm:col-span-2">
                     <Label htmlFor="room-card-number">Card number</Label>
