@@ -127,7 +127,7 @@ export interface PublicEnquiry {
  * The stay behind a room's permanent in-room QR code.
  *
  * The code identifies the room only, so the stay is whichever guest is checked
- * in to that room right now.
+ * in to that room right now, or the last guest who stayed in it.
  */
 export interface PublicRoomStay {
   roomNumber: string
@@ -135,6 +135,8 @@ export interface PublicRoomStay {
   email?: string
   checkIn?: string
   checkOut?: string
+  /** `Checked in` while the guest is in the room, `Checked out` after the stay ended. */
+  status?: string
 }
 
 export interface ApiError {

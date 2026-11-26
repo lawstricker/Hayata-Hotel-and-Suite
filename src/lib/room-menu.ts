@@ -8,6 +8,8 @@ export interface ActiveRoomStay {
   reservation: Reservation
   /** The address the guest's receipt is sent to, when it is known. */
   email?: string
+  /** False once the guest has checked out: the code still opens the menu. */
+  checkedIn: boolean
 }
 
 function normalizeRoomNumber(roomNumber: string) {
@@ -29,6 +31,7 @@ export function toActiveStay(stay: PublicRoomStay): ActiveRoomStay {
     rate: 0,
     updatedAt: new Date().toISOString(),
   }
+  const checkedIn = stay.status ? stay.status === 'Checked in' : true
   const reservation: Reservation = {
     id: `res-qr-${stay.roomNumber}`,
     guestId: `guest-qr-${stay.roomNumber}`,
@@ -39,7 +42,7 @@ export function toActiveStay(stay: PublicRoomStay): ActiveRoomStay {
     checkOut: stay.checkOut ?? '',
     adults: 1,
     children: 0,
-    status: 'Checked in',
+    status: checkedIn ? 'Checked in' : 'Checked out',
     source: 'ONLINE',
     ratePlan: 'Flexible',
     rate: 0,
@@ -47,7 +50,7 @@ export function toActiveStay(stay: PublicRoomStay): ActiveRoomStay {
     addOns: [],
     total: 0,
   }
-  return { room, reservation, email: stay.email }
+  return { room, reservation, email: stay.email, checkedIn }
 }
 
 /**
@@ -72,11 +75,11 @@ export function findActiveRoomStay(rooms: Room[], reservations: Reservation[], r
   ))
   if (!reservation?.roomNumber) return null
   const room = rooms.find((candidate) => candidate.number.toUpperCase() === reservation.roomNumber?.toUpperCase())
-  return room ? { room, reservation } : null
+  return room ? { room, reservation, checkedIn: true } : null
 }
 
-/** The reservation that belongs to a room that is occupied without a check-in record. */
-function toOccupiedRoomReservation(room: Room): Reservation {
+/** The reservation that belongs to a room that has no reservation of its own. */
+function toRoomReservation(room: Room): Reservation {
   return {
     id: `res-room-${room.number}`,
     guestId: `guest-room-${room.number}`,
@@ -87,7 +90,7 @@ function toOccupiedRoomReservation(room: Room): Reservation {
     checkOut: '',
     adults: 1,
     children: 0,
-    status: 'Checked in',
+    status: 'Checked out',
     source: 'Direct',
     ratePlan: 'In-house',
     rate: room.rate,
@@ -100,17 +103,26 @@ function toOccupiedRoomReservation(room: Room): Reservation {
 /**
  * The stay behind a room's permanent code, using only the in-browser mirror.
  *
- * A room that is marked as occupied is treated as occupied even when its
- * check-in has not reached the reservation list yet, so the printed card keeps
- * working for the guest who is in the room.
+ * The code identifies the room, so it keeps working after a checkout: the last
+ * guest who stayed in the room is used when nobody is checked in, and a room
+ * that has no reservation yet still opens its own menu.
  */
 export function findRoomStay(rooms: Room[], reservations: Reservation[], roomNumber: string): ActiveRoomStay | null {
   const checkedIn = findActiveRoomStay(rooms, reservations, roomNumber)
   if (checkedIn) return checkedIn
+
   const normalizedRoom = normalizeRoomNumber(roomNumber)
   const room = rooms.find((candidate) => normalizeRoomNumber(candidate.number) === normalizedRoom)
-  if (!room || room.status !== 'Occupied') return null
-  return { room, reservation: toOccupiedRoomReservation(room) }
+  if (!room) return null
+
+  // The last guest who stayed in the room, so a guest who has just checked out
+  // can still order from the kitchen.
+  const lastStay = reservations
+    .filter((candidate) => candidate.status === 'Checked out' && candidate.roomNumber?.toUpperCase() === normalizedRoom)
+    .sort((left, right) => (right.checkIn ?? '').localeCompare(left.checkIn ?? ''))[0]
+  if (lastStay) return { room, reservation: lastStay, checkedIn: false }
+
+  return { room, reservation: toRoomReservation(room), checkedIn: false }
 }
 
 /**
@@ -128,7 +140,7 @@ export async function fetchActiveRoomStay(roomNumber: string): Promise<ActiveRoo
       return null
     } catch (error) {
       const status = (error as { status?: number }).status
-      // The server answered: it knows whether the room has a checked-in guest.
+      // The server answered: it knows whether the room exists.
       if (typeof status === 'number' && status < 500) return null
       // The API is unreachable, so the in-browser mirror takes over below.
     }

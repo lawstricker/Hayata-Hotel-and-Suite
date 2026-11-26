@@ -47,8 +47,15 @@ describe('Server stay resolution', () => {
     expect(stay?.email).toBe('ada@example.com')
   })
 
-  it('closes the menu when the server says the room has no checked-in guest', async () => {
-    apiGet.mockRejectedValue(Object.assign(new Error('This in-room dining code is not linked to an active stay.'), { status: 403, code: 'ROOM_UNAVAILABLE' }))
+  it('keeps the menu open for a guest who has checked out', async () => {
+    apiGet.mockResolvedValue({ roomNumber: '410', guestName: 'Ada Okafor', status: 'Checked out' })
+    const stay = await fetchActiveRoomStay('410')
+    expect(stay?.checkedIn).toBe(false)
+    expect(stay?.reservation.guestName).toBe('Ada Okafor')
+  })
+
+  it('closes the menu when the code does not match a room', async () => {
+    apiGet.mockRejectedValue(Object.assign(new Error('This in-room dining code does not match a room at Hayata Hotel.'), { status: 403, code: 'ROOM_UNAVAILABLE' }))
     const stay = await fetchActiveRoomStay('410')
     expect(stay).toBeNull()
   })
@@ -56,7 +63,6 @@ describe('Server stay resolution', () => {
   it('falls back to the in-browser mirror when the API is unreachable', async () => {
     apiGet.mockRejectedValue(new TypeError('Failed to fetch'))
     const stay = await fetchActiveRoomStay('410')
-    expect(stay?.reservation.status).toBe('Checked in')
     expect(stay?.room.number).toBe('410')
   })
 })

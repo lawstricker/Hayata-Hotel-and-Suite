@@ -236,7 +236,7 @@ export function RoomMenuQrPage() {
         breadcrumbs={[{ label: 'Hotel operations' }, { label: 'In-room QR menus' }]}
         actions={<>
           <Button variant="outline" size="sm" asChild><Link to="/staff/restaurant/kds"><ChefHat /> Kitchen requests</Link></Button>
-          <Button variant="ghost" size="sm" onClick={() => toast.info('How it works', { description: 'The code points to the room number only. When a guest checks in, that room’s menu becomes active automatically without replacing the card. The card is only changed when a new code is created for the room or the room URL is modified. Orders are sent to the kitchen as room-service tickets.' })}>How it works</Button>
+          <Button variant="ghost" size="sm" onClick={() => toast.info('How it works', { description: 'The code points to the room number only. It identifies the room and not the guest, so it keeps working after a checkout and for the next guest without ever replacing the card. The card is only changed when a new code is created for the room or the room URL is modified. Orders are sent to the kitchen as room-service tickets.' })}>How it works</Button>
           <Button size="sm" onClick={() => setCreateOpen(true)}><QrCode /> Create QR codes</Button>
         </>}
       />
@@ -254,7 +254,7 @@ export function RoomMenuQrPage() {
             <div className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-primary text-primary-foreground"><QrCode className="size-4" /></div>
             <div>
               <p className="text-sm font-bold">Permanent room code</p>
-              <p className="text-xs text-muted-foreground">The QR never changes at checkout. It activates for the next checked-in guest in that room and stops working while the room is vacant. It is only replaced when a new code is created for the room or the room URL is modified.</p>
+              <p className="text-xs text-muted-foreground">The QR never changes at checkout. It identifies the room, so it keeps working after a guest has checked out and for every guest who stays in that room next. It is only replaced when a new code is created for the room or the room URL is modified.</p>
             </div>
           </div>
           <StatusPill status="Active" />

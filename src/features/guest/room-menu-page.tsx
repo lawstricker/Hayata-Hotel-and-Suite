@@ -9,7 +9,7 @@ import { Card, CardContent } from '@/components/ui/card'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Input, Label, Textarea } from '@/components/ui/input'
 import { StatusPill } from '@/components/common/status-pill'
-import { findActiveRoomStay, fetchActiveRoomStay, type ActiveRoomStay } from '@/lib/room-menu'
+import { findRoomStay, fetchActiveRoomStay, type ActiveRoomStay } from '@/lib/room-menu'
 import { fetchPublicMenu } from '@/lib/menu-api'
 import { fetchRoomOrderQuote, placePaidRoomOrder, toRoomOrderLines, type RoomOrderQuote } from '@/lib/room-orders'
 import { processPayment, recordTransaction, reversePayment } from '@/lib/payment-gateway'
@@ -37,12 +37,12 @@ function UnavailableRoom({ roomNumber }: { roomNumber: string }) {
           <div>
             <h1 className="font-display text-xl font-extrabold">Menu unavailable</h1>
             <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
-              Room {roomNumber || '—'} has no checked-in guest right now, so the kitchen menu is closed. The code in your room does not change: it opens again as soon as the next guest checks in.
+              We could not find room {roomNumber || '—'} at Hayata Hotel, so the kitchen menu cannot be opened for this code.
             </p>
           </div>
           <div className="rounded-lg border border-dashed border-border bg-muted/35 p-3 text-left text-[11px] text-muted-foreground">
             <p className="font-bold text-foreground">The QR card in your room is permanent.</p>
-            <p className="mt-1">It is only replaced when a new code is created for the room or the room link is updated. Please ask reception if you need help.</p>
+            <p className="mt-1">It identifies the room and not your stay, so it keeps working after checkout and for the next guest. Please ask reception if you need help.</p>
           </div>
         </CardContent>
       </Card>
@@ -96,7 +96,7 @@ export function RoomMenuPage() {
   const gatewaySettings = usePaymentGatewayStore((state) => state.settings)
 
   const localStay = useMemo(
-    () => findActiveRoomStay(rooms, reservations, roomNumber),
+    () => findRoomStay(rooms, reservations, roomNumber),
     [rooms, reservations, roomNumber],
   )
 
@@ -401,6 +401,11 @@ export function RoomMenuPage() {
               <p className="mt-2 max-w-xl text-sm leading-relaxed text-muted-foreground">
                 Freshly prepared by Hayata Kitchen and delivered to room {activeStay.room.number}. Pay for your order before it reaches the kitchen.
               </p>
+              {!activeStay.checkedIn && (
+                <p className="mt-3 max-w-xl rounded-lg border border-amber-300 bg-amber-50 p-3 text-xs leading-relaxed text-amber-800 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
+                  Your stay in room {activeStay.room.number} is closed, but this menu stays open for the room. You can still order, and the kitchen will deliver to room {activeStay.room.number}.
+                </p>
+              )}
             </section>
 
             {roomOrders.length > 0 && (

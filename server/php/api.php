@@ -780,39 +780,58 @@ if (preg_match('#^/public/bookings/([^/]+)/cancel$#', $route, $matches) && $meth
 }
 
 /**
- * Finds the active checked-in stay for a room.
+ * Finds the stay behind a room's permanent in-room dining code.
  *
- * In-room dining codes identify the room only, so the server confirms that the
- * room currently has a checked-in guest before it accepts any order.
+ * The code identifies the room, never the guest or reservation, so it keeps
+ * working after a checkout: the guest who is checked in is used when there is
+ * one, otherwise the last guest who stayed in that room. A room that has no
+ * reservation yet still has a permanent code, so the menu opens for the room
+ * itself and the order is delivered to that room.
  */
 function h_room_stay(PDO $pdo, string $roomNumber): array {
     $statement = $pdo->prepare(
-        "SELECT r.id, r.guest_name, r.room_number, r.check_in, r.check_out, g.email
+        "SELECT r.id, r.guest_name, r.room_number, r.check_in, r.check_out, r.status, g.email
          FROM reservations r
          LEFT JOIN guests g ON g.id = r.guest_id
-         WHERE r.status = 'Checked in' AND r.room_number = :room
-         ORDER BY r.check_in DESC LIMIT 1"
+         WHERE r.room_number = :room AND r.status IN ('Checked in', 'Checked out')
+         ORDER BY (r.status = 'Checked in') DESC, r.check_in DESC LIMIT 1"
     );
     $statement->execute(['room' => $roomNumber]);
     $stay = $statement->fetch();
-    if (!$stay) h_error('This in-room dining code is not linked to an active stay.', 'ROOM_UNAVAILABLE', 403);
-    return $stay;
+
+    $roomStatement = $pdo->prepare('SELECT number, guest_name FROM rooms WHERE number = :room LIMIT 1');
+    $roomStatement->execute(['room' => $roomNumber]);
+    $room = $roomStatement->fetch();
+
+    if (!$stay && !$room) h_error('This in-room dining code does not match a room at Hayata Hotel.', 'ROOM_UNAVAILABLE', 403);
+    if ($stay) return $stay;
+
+    return [
+        'id' => '',
+        'guest_name' => (string) ($room['guest_name'] ?? ''),
+        'room_number' => (string) ($room['number'] ?? $roomNumber),
+        'check_in' => null,
+        'check_out' => null,
+        'status' => null,
+        'email' => '',
+    ];
 }
 
 /**
  * The stay behind a room's permanent in-room QR code.
  *
  * The code identifies the room only, so the guest sees the stay that is checked
- * in to that room right now, whichever guest that is.
+ * in to that room right now, or the last guest who stayed in it.
  */
 function h_public_room_stay(PDO $pdo, string $roomNumber): array {
     $stay = h_room_stay($pdo, $roomNumber);
     return [
         'roomNumber' => (string) $stay['room_number'],
-        'guestName' => (string) $stay['guest_name'],
+        'guestName' => (string) ($stay['guest_name'] ?: 'Guest'),
         'email' => (string) ($stay['email'] ?? ''),
         'checkIn' => (string) ($stay['check_in'] ?? ''),
         'checkOut' => (string) ($stay['check_out'] ?? ''),
+        'status' => (string) ($stay['status'] ?? ''),
     ];
 }
 

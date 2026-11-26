@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { buildRoomMenuPath, buildRoomMenuUrl, findActiveRoomStay, findRoomStay, toActiveStay } from './room-menu'
 import type { Reservation, Room } from '@/types/domain'
-
 function room(overrides: Partial<Room> = {}): Room {
   return {
     id: 'room-410',
@@ -63,14 +62,20 @@ describe('Room stay resolution', () => {
     expect(stay).toBeNull()
   })
 
-  it('treats an occupied room as occupied even without a check-in record', () => {
-    const stay = findRoomStay([room({ status: 'Occupied', guestName: 'Ada Okafor' })], [], '410')
-    expect(stay?.reservation.status).toBe('Checked in')
+  it('keeps the menu open for the last guest who stayed in the room', () => {
+    const stay = findRoomStay([room({ status: 'Clean' })], [reservation({ status: 'Checked out' })], '410')
     expect(stay?.reservation.guestName).toBe('Ada Okafor')
+    expect(stay?.checkedIn).toBe(false)
   })
 
-  it('leaves a vacant room closed', () => {
-    expect(findRoomStay([room({ status: 'Available' })], [], '410')).toBeNull()
+  it('opens the menu for a room that has no reservation yet', () => {
+    const stay = findRoomStay([room({ status: 'Available' })], [], '410')
+    expect(stay?.room.number).toBe('410')
+    expect(stay?.checkedIn).toBe(false)
+  })
+
+  it('closes the menu for a room that does not exist', () => {
+    expect(findRoomStay([], [], '410')).toBeNull()
   })
 
   it('maps a stay resolved by the server onto the local room and reservation', () => {
@@ -79,5 +84,11 @@ describe('Room stay resolution', () => {
     expect(stay.room.status).toBe('Occupied')
     expect(stay.reservation.status).toBe('Checked in')
     expect(stay.reservation.guestName).toBe('Ada Okafor')
+  })
+
+  it('marks a stay the server reports as checked out', () => {
+    const stay = toActiveStay({ roomNumber: '410', guestName: 'Ada Okafor', status: 'Checked out' })
+    expect(stay.checkedIn).toBe(false)
+    expect(stay.reservation.status).toBe('Checked out')
   })
 })
