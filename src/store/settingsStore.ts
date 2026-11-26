@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
+import { defaultNotificationSettings, type NotificationSettings } from '@/lib/notification-settings'
 
 export interface HotelProfile {
   name: string
@@ -23,12 +24,15 @@ interface SettingsState {
   serviceCharges: { restaurant: boolean; taxInclusive: boolean; rounding: string }
   notifications: Record<string, boolean>
   outlets: Record<string, OutletSetting>
+  /** SMTP configuration for the automatic guest emails. */
+  notificationSettings: NotificationSettings
   savedAt: string | null
   updateHotel: (values: HotelProfile) => void
   setTaxRate: (key: string, rate: string) => void
   setServiceCharge: (key: 'restaurant' | 'taxInclusive' | 'rounding', value: boolean | string) => void
   setNotification: (key: string, value: boolean) => void
   updateOutlet: (key: string, values: OutletSetting) => void
+  setNotificationSettings: (values: NotificationSettings) => void
   markSaved: () => void
 }
 
@@ -52,19 +56,22 @@ export const useSettingsStore = create<SettingsState>()(
         'Atlas Bar': { name: 'Atlas Bar', type: 'Bar & cellar', skus: 15, enabled: true },
         Housekeeping: { name: 'Housekeeping', type: 'Guest supplies', skus: 15, enabled: true },
       },
+      notificationSettings: { ...defaultNotificationSettings },
       savedAt: null,
       updateHotel: (hotel) => set({ hotel }),
       setTaxRate: (key, rate) => set((state) => ({ taxRates: { ...state.taxRates, [key]: rate } })),
       setServiceCharge: (key, value) => set((state) => ({ serviceCharges: { ...state.serviceCharges, [key]: value } })),
       setNotification: (key, value) => set((state) => ({ notifications: { ...state.notifications, [key]: value } })),
       updateOutlet: (key, values) => set((state) => ({ outlets: { ...state.outlets, [key]: values } })),
+      setNotificationSettings: (notificationSettings) => set({ notificationSettings }),
       markSaved: () => set({ savedAt: new Date().toISOString() }),
     }),
     {
       name: 'hayata-hms-settings',
       partialize: (state) => ({
         hotel: state.hotel, taxRates: state.taxRates, serviceCharges: state.serviceCharges,
-        notifications: state.notifications, outlets: state.outlets, savedAt: state.savedAt,
+        notifications: state.notifications, outlets: state.outlets,
+        notificationSettings: state.notificationSettings, savedAt: state.savedAt,
       }),
     },
   ),

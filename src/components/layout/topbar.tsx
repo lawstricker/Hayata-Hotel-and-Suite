@@ -59,8 +59,9 @@ export function Topbar({ onMenuClick, onSearchClick }: TopbarProps) {
     toast.success(`Switched to ${roleLabels[role]}`, { description: 'Navigation and data visibility now reflect this role.' })
   }
 
-  function handleLogout() {
-    logout()
+  async function handleLogout() {
+    // The token is revoked on the server before the browser forgets it.
+    await logout()
     navigate('/staff/login')
     toast.success('Signed out securely')
   }

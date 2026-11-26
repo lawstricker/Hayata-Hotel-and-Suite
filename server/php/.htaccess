@@ -1,0 +1,38 @@
+# Hayata PHP API - directory protection
+#
+# This file belongs in the folder that Apache serves the API from (for example
+# C:\xampp\htdocs\hayata-api). Only api.php may be reached over HTTP. Every
+# other PHP file in this folder is a library, a migration or a maintenance
+# script that must never be executed by a request from the internet.
+
+<IfModule mod_authz_core.c>
+    # Deny by default, then allow the single entry point.
+    <FilesMatch "^(?!api\.php$)">
+        Require all denied
+    </FilesMatch>
+</IfModule>
+
+<IfModule !mod_authz_core.c>
+    <FilesMatch "^(?!api\.php$)">
+        Order allow,deny
+        Deny from all
+    </FilesMatch>
+</IfModule>
+
+# No directory listings.
+<IfModule mod_autoindex.c>
+    Options -Indexes
+</IfModule>
+
+# Do not advertise the PHP version or leak errors to the browser.
+<IfModule mod_php.c>
+    php_flag expose_php off
+    php_flag display_errors off
+    php_flag log_errors on
+</IfModule>
+
+<IfModule mod_headers.c>
+    # The API sets its own security headers from PHP. Only the server banner is
+    # removed here, so the same header is never sent twice.
+    Header always unset X-Powered-By
+</IfModule>

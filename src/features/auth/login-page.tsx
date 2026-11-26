@@ -10,12 +10,11 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/input'
 import { demoUsers } from '@/mock/data'
 import { useAuthStore } from '@/store/authStore'
-import { serverLogin } from '@/lib/auth-api'
 import { AuthLayout } from './auth-layout'
 
 const loginSchema = z.object({
   email: z.email('Enter a valid email address'),
-  password: z.string().min(6, 'Password must be at least 6 characters'),
+  password: z.string().min(1, 'Enter your password'),
 })
 
 type LoginValues = z.infer<typeof loginSchema>
@@ -35,12 +34,14 @@ export function LoginPage() {
     setSubmitting(true)
     setError('')
     try {
-      await serverLogin(values.email, values.password)
+      // The store signs in through the API; the browser never checks the
+      // password itself.
       const user = await login(values.email, values.password)
       toast.success(`Welcome back, ${user.name.split(' ')[0]}`, { description: 'Signed in to Hayata HMS.' })
       navigate('/staff')
     } catch (loginError) {
-      setError(loginError instanceof Error ? loginError.message : 'Unable to sign in')
+      const message = loginError instanceof Error ? loginError.message : 'Unable to sign in'
+      setError(message)
     } finally {
       setSubmitting(false)
     }

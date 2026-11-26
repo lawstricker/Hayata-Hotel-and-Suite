@@ -13,6 +13,7 @@ import { tables as seedTables } from '@/mock/data'
 import { useHotelStore } from '@/store/hotelStore'
 import { useMenuStore } from '@/store/menuStore'
 import { MenuImageField } from '@/features/pos/menu-image-field'
+import { KitchenAlertWatcher } from '@/features/pos/kitchen-alert'
 import { cn, downloadCsv, formatCurrency } from '@/lib/utils'
 import type { MenuItem, Order, OrderStatus, RestaurantTable } from '@/types/domain'
 
@@ -305,10 +306,95 @@ export function RestaurantOrdersPage() {
 }
 
 const kdsColumns: OrderStatus[] = ['New', 'Preparing', 'Ready']
+
 export function KitchenDisplayPage({ outlet = 'RESTAURANT' }: { outlet?: 'RESTAURANT' | 'BAR' }) {
   const orders = useHotelStore((state) => state.orders)
   const updateStatus = useHotelStore((state) => state.updateOrderStatus)
-  return <div className="space-y-6"><PageHeader title={outlet === 'BAR' ? 'Bar display' : 'Kitchen display'} description="Live tickets by station and preparation status." breadcrumbs={[{ label: 'Food & beverage' }, { label: outlet === 'BAR' ? 'Bar KDS' : 'Kitchen display' }]} actions={<Badge variant="success" className="px-3 py-1.5"><span className="mr-1.5 size-1.5 animate-pulse rounded-full bg-current" /> Live tickets</Badge>} /><div className="grid gap-4 lg:grid-cols-3">{kdsColumns.map((status) => { const tickets = orders.filter((order) => order.outlet === outlet && order.status === status); return <Card key={status} className="min-h-[520px] bg-muted/25"><div className="flex items-center justify-between border-b border-border p-4"><div className="flex items-center gap-2"><span className={cn('size-2.5 rounded-full', status === 'New' ? 'bg-red-500' : status === 'Preparing' ? 'bg-amber-500' : 'bg-emerald-500')} /><h3 className="font-display font-bold">{status}</h3></div><Badge variant="secondary">{tickets.length}</Badge></div><CardContent className="space-y-3 pt-4">{tickets.map((order) => <div key={order.id} className="rounded-xl border border-border bg-card p-4 shadow-xs"><div className="flex items-start justify-between"><div><p className="font-mono text-sm font-extrabold">{order.orderNumber}</p><p className="text-[10px] text-muted-foreground">{order.roomNumber ? `Room ${order.roomNumber}` : order.tableName ?? order.type} · {order.server}</p></div><span className="flex items-center gap-1 text-[10px] font-bold text-muted-foreground"><Clock3 className="size-3" /> {Math.max(1, Math.floor((Date.now() - new Date(order.createdAt || Date.now()).getTime()) / 60000))}m</span></div><div className="my-3 space-y-2 border-y border-border py-3">{(order.items ?? []).map((item) => <div key={item.id} className="text-xs"><div className="flex justify-between font-bold"><span><span className="mr-2 text-primary">{item.quantity}×</span>{item.name}</span><span>{formatCurrency(item.price * item.quantity)}</span></div>{item.modifiers.map((modifier) => <p key={modifier} className="ml-7 mt-0.5 text-[10px] font-semibold text-red-600">↳ {modifier}</p>)}</div>)}</div>{order.instructions && <p className="mb-3 rounded-lg bg-amber-50 p-2 text-[10px] font-semibold text-amber-700 dark:bg-amber-950/40 dark:text-amber-300">Note: {order.instructions}</p>}<Button className="w-full" size="sm" variant={status === 'Ready' ? 'default' : 'outline'} onClick={() => { const next = status === 'New' ? 'Preparing' : status === 'Preparing' ? 'Ready' : 'Served'; updateStatus(order.id, next); toast.success(`${order.orderNumber} → ${next}`) }}>{status === 'New' ? <ChefHat /> : status === 'Preparing' ? <UtensilsCrossed /> : <Send />}{status === 'New' ? 'Start preparation' : status === 'Preparing' ? 'Mark ready' : 'Mark served'}</Button></div>)}{!tickets.length && <div className="flex min-h-40 flex-col items-center justify-center text-center"><Checkmark /><p className="mt-2 text-xs font-semibold text-muted-foreground">No tickets</p></div>}</CardContent></Card> })}</div></div>
+  const isBar = outlet === 'BAR'
+
+  return (
+    <div className="space-y-6">
+      <PageHeader
+        title={isBar ? 'Bar display' : 'Kitchen display'}
+        description="Live tickets by station and preparation status."
+        breadcrumbs={[{ label: 'Food & beverage' }, { label: isBar ? 'Bar KDS' : 'Kitchen display' }]}
+        actions={<Badge variant="success" className="px-3 py-1.5"><span className="mr-1.5 size-1.5 animate-pulse rounded-full bg-current" /> Live tickets</Badge>}
+      />
+
+      <div className="grid gap-4 lg:grid-cols-3">
+        {kdsColumns.map((status) => {
+          const tickets = orders.filter((order) => order.outlet === outlet && order.status === status)
+          return (
+            <Card key={status} className="min-h-[520px] bg-muted/25">
+              <div className="flex items-center justify-between border-b border-border p-4">
+                <div className="flex items-center gap-2">
+                  <span className={cn('size-2.5 rounded-full', status === 'New' ? 'bg-red-500' : status === 'Preparing' ? 'bg-amber-500' : 'bg-emerald-500')} />
+                  <h3 className="font-display font-bold">{status}</h3>
+                </div>
+                <Badge variant="secondary">{tickets.length}</Badge>
+              </div>
+              <CardContent className="space-y-3 pt-4">
+                {tickets.map((order) => (
+                  <div key={order.id} className="rounded-xl border border-border bg-card p-4 shadow-xs">
+                    <div className="flex items-start justify-between">
+                      <div>
+                        <p className="font-mono text-sm font-extrabold">{order.orderNumber}</p>
+                        <p className="text-[10px] text-muted-foreground">
+                          {order.roomNumber ? `Room ${order.roomNumber}` : order.tableName ?? order.type} &middot; {order.server}
+                        </p>
+                      </div>
+                      <span className="flex items-center gap-1 text-[10px] font-bold text-muted-foreground">
+                        <Clock3 className="size-3" /> {Math.max(1, Math.floor((Date.now() - new Date(order.createdAt || Date.now()).getTime()) / 60000))}m
+                      </span>
+                    </div>
+                    <div className="my-3 space-y-2 border-y border-border py-3">
+                      {(order.items ?? []).map((item) => (
+                        <div key={item.id} className="text-xs">
+                          <div className="flex justify-between font-bold">
+                            <span><span className="mr-2 text-primary">{item.quantity}&times;</span>{item.name}</span>
+                            <span>{formatCurrency(item.price * item.quantity)}</span>
+                          </div>
+                          {item.modifiers.map((modifier) => (
+                            <p key={modifier} className="ml-7 mt-0.5 text-[10px] font-semibold text-red-600">+ {modifier}</p>
+                          ))}
+                        </div>
+                      ))}
+                    </div>
+                    {order.instructions && (
+                      <p className="mb-3 rounded-lg bg-amber-50 p-2 text-[10px] font-semibold text-amber-700 dark:bg-amber-950/40 dark:text-amber-300">
+                        Note: {order.instructions}
+                      </p>
+                    )}
+                    <Button
+                      className="w-full"
+                      size="sm"
+                      variant={status === 'Ready' ? 'default' : 'outline'}
+                      onClick={() => {
+                        const next = status === 'New' ? 'Preparing' : status === 'Preparing' ? 'Ready' : 'Served'
+                        updateStatus(order.id, next)
+                        toast.success(`${order.orderNumber} &rarr; ${next}`)
+                      }}
+                    >
+                      {status === 'New' ? <ChefHat /> : status === 'Preparing' ? <UtensilsCrossed /> : <Send />}
+                      {status === 'New' ? 'Start preparation' : status === 'Preparing' ? 'Mark ready' : 'Mark served'}
+                    </Button>
+                  </div>
+                ))}
+                {!tickets.length && (
+                  <div className="flex min-h-40 flex-col items-center justify-center text-center">
+                    <Checkmark />
+                    <p className="mt-2 text-xs font-semibold text-muted-foreground">No tickets</p>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          )
+        })}
+      </div>
+
+      <KitchenAlertWatcher outlet={outlet} />
+    </div>
+  )
 }
 function Checkmark() { return <div className="flex size-9 items-center justify-center rounded-full bg-emerald-50 text-emerald-600 dark:bg-emerald-950/60"><ChefHat className="size-4" /></div> }
 

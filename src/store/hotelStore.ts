@@ -41,6 +41,8 @@ interface HotelState {
   updateOrderStatus: (orderId: string, status: Order['status']) => void
   syncLiveOrders: () => void
   syncLiveReservations: () => void
+  /** Adds orders that came from another device, without writing them back. */
+  mergeServerOrders: (orders: Order[]) => void
   hydrateFromServer: (data: Partial<Pick<HotelState, 'reservations' | 'rooms' | 'orders' | 'inventory'>>) => void
   addPurchaseOrder: (purchaseOrder: PurchaseOrder) => void
   updatePurchaseOrderStatus: (purchaseOrderId: string, status: PurchaseOrder['status']) => void
@@ -149,6 +151,18 @@ export const useHotelStore = create<HotelState>((set, get) => ({
     const stored = readLiveOrders()
     const storedIds = new Set(stored.map((order) => order.id))
     return { orders: [...stored, ...state.orders.filter((order) => !storedIds.has(order.id))] }
+  }),
+  mergeServerOrders: (incoming) => set((state) => {
+    if (!incoming.length) return state
+    // The server list replaces the previous one, the same way the bootstrap
+    // does, so the kitchen never sees the same ticket twice. Orders that were
+    // created in this browser are kept.
+    const byId = new Map(incoming.map((order) => [order.id, { ...order, items: order.items ?? [] }]))
+    for (const live of readLiveOrders()) {
+      const existing = byId.get(live.id)
+      byId.set(live.id, existing ? { ...existing, items: existing.items?.length ? existing.items : live.items } : { ...live, items: live.items ?? [] })
+    }
+    return { orders: [...byId.values()] }
   }),
   syncLiveReservations: () => set((state) => {
     const stored = readLiveReservations()

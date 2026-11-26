@@ -1,5 +1,7 @@
 import { useEffect } from 'react'
+import { toast } from 'sonner'
 import { apiGet, getApiToken } from '@/lib/api-client'
+import { useAuthStore } from '@/store/authStore'
 import { useHotelStore } from '@/store/hotelStore'
 
 export function useServerBootstrap() {
@@ -22,5 +24,17 @@ export function useServerBootstrap() {
     void load()
     window.addEventListener('hayata:token-change', load)
     return () => { active = false; window.removeEventListener('hayata:token-change', load) }
+  }, [])
+
+  // The API clears the token when it refuses a request, so the browser has to
+  // end the session as well instead of showing a half-signed-in screen.
+  useEffect(() => {
+    const handleExpired = () => {
+      if (!useAuthStore.getState().user) return
+      useAuthStore.setState({ user: null })
+      toast.warning('Your session has expired', { description: 'Please sign in again.' })
+    }
+    window.addEventListener('hayata:session-expired', handleExpired)
+    return () => window.removeEventListener('hayata:session-expired', handleExpired)
   }, [])
 }

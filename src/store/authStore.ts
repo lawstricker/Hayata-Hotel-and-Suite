@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
+import { serverLogin, serverLogout } from '@/lib/auth-api'
 import { allStaff } from '@/store/staffStore'
 import type { Role, User } from '@/types/domain'
 
@@ -8,7 +9,7 @@ interface AuthState {
   theme: 'light' | 'dark'
   sidebarCollapsed: boolean
   login: (email: string, password: string) => Promise<User>
-  logout: () => void
+  logout: () => Promise<void>
   switchRole: (role: Role) => void
   setTheme: (theme: 'light' | 'dark') => void
   toggleSidebar: () => void
@@ -20,14 +21,22 @@ export const useAuthStore = create<AuthState>()(
       user: null,
       theme: 'light',
       sidebarCollapsed: false,
+      /**
+       * Signs in through the API.
+       *
+       * The password is never checked in the browser. When the server is
+       * unavailable the sign-in fails, because a local check would let anyone
+       * who can run the bundle sign in without a credential.
+       */
       login: async (email, password) => {
-        await new Promise((resolve) => window.setTimeout(resolve, 650))
-        const user = allStaff().find((candidate) => candidate.email.toLowerCase() === email.toLowerCase())
-        if (!user || password !== 'demo123') throw new Error('Invalid email or password. Use demo123 for all accounts.')
+        const user = await serverLogin(email, password)
         set({ user })
         return user
       },
-      logout: () => set({ user: null }),
+      logout: async () => {
+        await serverLogout()
+        set({ user: null })
+      },
       switchRole: (role) => {
         const current = useAuthStore.getState().user
         const user = allStaff().find((candidate) => candidate.role === role)

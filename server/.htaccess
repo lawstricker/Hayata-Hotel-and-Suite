@@ -1,0 +1,30 @@
+# Deployment rules for the Hayata API.
+#
+# Copy this file into the folder that Apache serves the API from, next to
+# `api.php` (for example C:\xampp\htdocs\hayata-api). It only blocks the
+# maintenance scripts, the library files and dotfiles; the API itself is
+# served by `api.php`.
+
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+
+    # Never serve dotfiles such as .env, .git or .htpasswd.
+    RewriteRule "(^|/)\." - [F,L]
+
+    # Deny the maintenance and migration scripts.
+    RewriteRule "^(setup|migrate|seed_access)\.php$" - [F,L]
+
+    # Deny the raw library files.
+    RewriteRule "^(config|config\.local|db|mailer|access-matrix)\.php$" - [F,L]
+    RewriteRule "^migrations/" - [F,L]
+</IfModule>
+
+<IfModule mod_autoindex.c>
+    Options -Indexes
+</IfModule>
+
+<IfModule mod_headers.c>
+    # The API sets its own security headers from PHP, so only the server banner
+    # is removed here and no header is sent twice.
+    Header always unset X-Powered-By
+</IfModule>

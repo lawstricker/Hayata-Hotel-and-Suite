@@ -12,23 +12,15 @@ export function syncReservationStatus(reservationId: string, status: Reservation
 /**
  * Persists an order and its line items.
  *
- * The order row must exist before its items are inserted: `order_items.order_id` is a
- * foreign key to `orders.id`, so writing them concurrently fails with an FK violation
- * and silently drops the order lines.
+ * The order and its lines go in a single request. The server writes them in
+ * one transaction, so a ticket can never reach the kitchen without the items
+ * that have to be prepared.
  */
 export async function syncOrderCreate(order: Order) {
   try {
-    await apiPost('/resource/orders', { ...order, items: undefined })
+    await apiPost('/resource/orders', order)
   } catch {
     // The in-browser state remains the source of truth if the server is unavailable.
-    return
-  }
-  for (const item of order.items ?? []) {
-    try {
-      await apiPost('/resource/order-items', { ...item, orderId: order.id })
-    } catch {
-      // A single failed line should not block the remaining items.
-    }
   }
 }
 

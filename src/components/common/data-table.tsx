@@ -33,6 +33,9 @@ interface DataTableProps<T> {
   filename?: string
   selectable?: boolean
   initialSort?: { key: string; direction: 'asc' | 'desc' }
+  /** Controlled search term. Used when the filtering happens on the server. */
+  searchValue?: string
+  onSearchChange?: (query: string) => void
 }
 
 function rawValue<T>(row: T, key: string): unknown {
@@ -41,12 +44,19 @@ function rawValue<T>(row: T, key: string): unknown {
   return value
 }
 
-export function DataTable<T extends { id: string }>({ data, columns, searchPlaceholder = 'Search…', searchKeys, toolbar, bulkActions, onRowClick, pageSize = 8, emptyTitle = 'No matching records', emptyDescription = 'Try changing your filters or search query.', filename = 'export.csv', selectable = false, initialSort }: DataTableProps<T>) {
-  const [query, setQuery] = useState('')
+export function DataTable<T extends { id: string }>({ data, columns, searchPlaceholder = 'Search…', searchKeys, toolbar, bulkActions, onRowClick, pageSize = 8, emptyTitle = 'No matching records', emptyDescription = 'Try changing your filters or search query.', filename = 'export.csv', selectable = false, initialSort, searchValue, onSearchChange }: DataTableProps<T>) {
+  const [internalQuery, setInternalQuery] = useState('')
+  const query = searchValue ?? internalQuery
   const [page, setPage] = useState(1)
   const [sort, setSort] = useState<{ key: string; direction: 'asc' | 'desc' } | null>(initialSort ?? null)
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [visibleColumns, setVisibleColumns] = useState<Set<string>>(new Set(columns.map((column) => column.key)))
+
+  function updateQuery(value: string) {
+    if (onSearchChange) onSearchChange(value)
+    else setInternalQuery(value)
+    setPage(1)
+  }
 
   const filtered = useMemo(() => {
     let rows = [...data]
@@ -108,8 +118,8 @@ export function DataTable<T extends { id: string }>({ data, columns, searchPlace
         <div className="flex flex-1 flex-col gap-2 sm:flex-row sm:items-center">
           <div className="relative w-full sm:max-w-xs">
             <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-            <Input value={query} onChange={(event) => { setQuery(event.target.value); setPage(1) }} placeholder={searchPlaceholder} className="pl-9" aria-label={searchPlaceholder} />
-            {query && <button type="button" onClick={() => setQuery('')} className="absolute right-2.5 top-1/2 -translate-y-1/2 rounded p-1 text-muted-foreground hover:bg-muted" aria-label="Clear search"><X className="size-3.5" /></button>}
+            <Input value={query} onChange={(event) => updateQuery(event.target.value)} placeholder={searchPlaceholder} className="pl-9" aria-label={searchPlaceholder} />
+            {query && <button type="button" onClick={() => updateQuery('')} className="absolute right-2.5 top-1/2 -translate-y-1/2 rounded p-1 text-muted-foreground hover:bg-muted" aria-label="Clear search"><X className="size-3.5" /></button>}
           </div>
           {toolbar}
         </div>

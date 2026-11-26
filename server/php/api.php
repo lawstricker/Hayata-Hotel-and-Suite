@@ -2,9 +2,46 @@
 declare(strict_types=1);
 
 require __DIR__ . '/db.php';
+require __DIR__ . '/mailer.php';
 
+/**
+ * Turns an unexpected failure into a JSON error.
+ *
+ * Without this a PHP fatal error ends the response halfway through, and the
+ * browser reports it as "Failed to fetch" with no clue what went wrong.
+ */
+set_exception_handler(static function (Throwable $exception): void {
+    $config = hayata_config();
+    error_log('Hayata API error: ' . $exception->getMessage() . ' @ ' . $exception->getFile() . ':' . $exception->getLine());
+    if (!headers_sent()) {
+        http_response_code(500);
+        header('Content-Type: application/json; charset=utf-8');
+    }
+    echo json_encode([
+        'error' => $config['debug']
+            ? $exception->getMessage()
+            : 'The server could not complete the request.',
+        'code' => 'SERVER_ERROR',
+    ]);
+});
+
+register_shutdown_function(static function (): void {
+    $error = error_get_last();
+    if ($error === null || !in_array($error['type'], [E_ERROR, E_PARSE, E_CORE_ERROR, E_COMPILE_ERROR], true)) return;
+    error_log('Hayata API fatal: ' . $error['message'] . ' @ ' . $error['file'] . ':' . $error['line']);
+    if (!headers_sent()) {
+        http_response_code(500);
+        header('Content-Type: application/json; charset=utf-8');
+    }
+    echo json_encode(['error' => 'The server could not complete the request.', 'code' => 'SERVER_ERROR']);
+});
+
+// Preflight requests are answered with the CORS policy and nothing else.
 if (hayata_method() === 'OPTIONS') {
-    hayata_json(['ok' => true]);
+    hayata_security_headers();
+    hayata_apply_cors();
+    http_response_code(204);
+    exit;
 }
 
 $pdo = hayata_pdo();
@@ -12,6 +49,21 @@ $route = hayata_route();
 $method = hayata_method();
 $body = hayata_body();
 $query = hayata_query();
+
+// Throttle every caller. Signed-in staff are counted per session, anonymous
+// callers per address; the public write endpoints get the tightest budget.
+if ($route !== '/health') {
+    $config = hayata_config();
+    $token = hayata_bearer_token();
+    $identity = $token !== null
+        ? 'session:' . substr(hash('sha256', $token), 0, 32)
+        : 'ip:' . hayata_client_ip();
+    if (strpos($route, '/public/') === 0) {
+        hayata_rate_limit($pdo, 'public:' . $identity, $method === 'GET' ? 60 : 20, 60);
+    } else {
+        hayata_rate_limit($pdo, 'api:' . $identity, $config['rate_limit_max'], $config['rate_limit_window']);
+    }
+}
 
 function h_camel(string $value): string {
     return lcfirst(str_replace(' ', '', ucwords(preg_replace('/[^a-zA-Z0-9]+/', ' ', $value))));
@@ -114,10 +166,74 @@ function h_normalize_menu_items(array $items): array {
     return array_map('h_normalize_menu_item', $items);
 }
 
-function h_table_columns(PDO $pdo, string $table): array {
-    $statement = $pdo->prepare('SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = :table');
+/**
+ * Strips the fields that must never leave the server from a staff record.
+ *
+ * The password hash and the role id are removed so a client cannot read or
+ * replay them.
+ */
+function h_public_user(array $user): array {
+    unset($user['password_hash'], $user['passwordHash'], $user['role_id'], $user['roleId']);
+    return $user;
+}
+
+/**
+ * Lists the fields a write touched, so the activity log says what changed.
+ */
+function h_changed_fields(array $data): string {
+    $fields = [];
+    foreach (array_keys($data) as $key) {
+        $name = (string) $key;
+        // The credential columns are never named in the audit trail.
+        if (in_array($name, ['password', 'password_hash', 'passwordHash'], true)) {
+            $fields[] = 'password';
+            continue;
+        }
+        $fields[] = h_snake($name);
+    }
+    return $fields ? implode(', ', $fields) : 'record';
+}
+
+/**
+ * Writes an entry to the server-side audit trail.
+ *
+ * Every write through the generic CRUD is recorded, so the activity log in the
+ * dashboard is complete even when the browser is offline.
+ */
+function h_audit(PDO $pdo, array $user, string $action, string $module, string $reference = '', string $detail = ''): void {
+    try {
+        $statement = $pdo->prepare('INSERT INTO audit_logs (id, timestamp, actor, module, action, detail, ip_address) VALUES (:id, NOW(), :actor, :module, :action, :detail, :ip)');
+        $statement->execute([
+            'id' => 'aud-' . bin2hex(random_bytes(8)),
+            'actor' => (string) ($user['name'] ?? 'System'),
+            'module' => substr($module, 0, 60),
+            'action' => substr($action . ($reference !== '' ? ' · ' . $reference : ''), 0, 180),
+            'detail' => substr($detail, 0, 255),
+            'ip' => hayata_client_ip(),
+        ]);
+    } catch (Throwable $exception) {
+        // Auditing must never break the request that triggered it.
+    }
+}
+
+/**
+ * Reads the column names and types of a table.
+ *
+ * The types are needed because a value that goes into a DATE or DATETIME
+ * column has to be in the MySQL format, whatever the client sent.
+ */
+function h_table_column_types(PDO $pdo, string $table): array {
+    $statement = $pdo->prepare('SELECT COLUMN_NAME, DATA_TYPE FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = :table');
     $statement->execute(['table' => $table]);
-    return $statement->fetchAll(PDO::FETCH_COLUMN);
+    $types = [];
+    foreach ($statement->fetchAll() as $row) {
+        $types[(string) $row['COLUMN_NAME']] = strtolower((string) $row['DATA_TYPE']);
+    }
+    return $types;
+}
+
+function h_table_columns(PDO $pdo, string $table): array {
+    return array_keys(h_table_column_types($pdo, $table));
 }
 
 function h_snake(string $value): string {
@@ -128,15 +244,62 @@ function h_unsafe_sql_columns(array $columns): array {
     return array_values(array_filter($columns, fn($column) => preg_match('/^[A-Za-z0-9_]+$/', $column) === 1));
 }
 
+/**
+ * Converts a date or time value into the format the column expects.
+ *
+ * Browsers send ISO-8601 (`2026-11-26T03:01:26.425Z`), while MySQL only
+ * accepts `2026-11-26 03:01:26`. Without this conversion every write that
+ * carries a timestamp from the browser fails with an invalid datetime error,
+ * which is why the normalisation has to live in the data layer rather than in
+ * one caller.
+ *
+ * The value is moved into the application timezone, so a timestamp written by
+ * the browser and one written by `NOW()` describe the same wall-clock time.
+ */
+function h_datetime_value($value, string $type) {
+    if (!is_string($value) || trim($value) === '') return $value;
+    $type = strtolower($type);
+    $isDate = $type === 'date';
+    $isDateTime = in_array($type, ['datetime', 'timestamp'], true);
+    if (!$isDate && !$isDateTime) return $value;
+    $raw = trim($value);
+
+    // A plain calendar date needs no parsing.
+    if ($isDate && preg_match('/^\d{4}-\d{2}-\d{2}$/', $raw)) return $raw;
+
+    // Already in the MySQL format.
+    if (preg_match('/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/', $raw)) return $raw;
+
+    try {
+        $moment = new DateTimeImmutable($raw);
+    } catch (Throwable $exception) {
+        // An unparsable value is passed through unchanged so the database
+        // reports the problem with a clear error of its own.
+        return $value;
+    }
+    $moment = $moment->setTimezone(new DateTimeZone(hayata_config()['app_timezone']));
+    return $isDate ? $moment->format('Y-m-d') : $moment->format('Y-m-d H:i:s');
+}
+
+/**
+ * Prepares one value for the database.
+ *
+ * Arrays become JSON, booleans become 0/1 and dates become the format the
+ * column expects.
+ */
+function h_column_value($value, string $type) {
+    if (is_array($value)) $value = json_encode($value, JSON_UNESCAPED_UNICODE);
+    if (is_bool($value)) $value = $value ? 1 : 0;
+    return h_datetime_value($value, $type);
+}
+
 function h_insert(PDO $pdo, string $table, array $data): string {
-    $columns = h_table_columns($pdo, $table);
+    $types = h_table_column_types($pdo, $table);
     $payload = [];
     foreach ($data as $key => $value) {
         $column = h_snake((string) $key);
-        if (!in_array($column, $columns, true)) continue;
-        if (is_array($value)) $value = json_encode($value, JSON_UNESCAPED_UNICODE);
-        if (is_bool($value)) $value = $value ? 1 : 0;
-        $payload[$column] = $value;
+        if (!array_key_exists($column, $types)) continue;
+        $payload[$column] = h_column_value($value, $types[$column]);
     }
     $names = array_keys($payload);
     $sql = sprintf('INSERT INTO `%s` (%s) VALUES (%s)', $table, implode(',', array_map(fn($c) => "`$c`", h_unsafe_sql_columns($names))), implode(',', array_map(fn($c) => ':' . $c, h_unsafe_sql_columns($names))));
@@ -146,15 +309,115 @@ function h_insert(PDO $pdo, string $table, array $data): string {
     return $data['id'] ?? $data['reference'] ?? (string) $pdo->lastInsertId();
 }
 
+/**
+ * Finds a free identifier for a line item.
+ *
+ * The identifier of a line is chosen by the client, but it is a primary key
+ * for the whole table, so a line that already belongs to another order is
+ * given a name of its own instead of failing the whole order.
+ */
+function h_unique_line_id(PDO $pdo, string $orderId, string $wanted, int $index): string {
+    if ($wanted === '') return substr($orderId . '-line-' . ($index + 1), 0, 80);
+    $statement = $pdo->prepare('SELECT order_id FROM order_items WHERE id = :id');
+    $statement->execute(['id' => $wanted]);
+    $owner = $statement->fetchColumn();
+    if ($owner === false || (string) $owner === $orderId) return $wanted;
+    $candidate = substr($orderId . '-' . $wanted, 0, 80);
+    $suffix = 1;
+    while (true) {
+        $statement->execute(['id' => $candidate]);
+        if ($statement->fetchColumn() === false) return $candidate;
+        $suffix++;
+        $candidate = substr($orderId . '-' . $wanted . '-' . $suffix, 0, 80);
+    }
+}
+
+/**
+ * Writes a row and, for an order, the line items that belong to it.
+ *
+ * The order and its lines are written in one transaction. `order_items.order_id`
+ * is a foreign key to `orders.id`, so a separate request per line could leave
+ * a ticket behind without the items the kitchen has to prepare.
+ *
+ * Sending the same order again replaces its lines instead of failing, so a
+ * client that retries after a network error ends up with one ticket that
+ * carries the current items.
+ */
+function h_insert_order_with_lines(PDO $pdo, string $table, array $body): string {
+    $lines = $table === 'orders' && is_array($body['items'] ?? null) ? $body['items'] : null;
+    if ($lines === null) return h_insert($pdo, $table, $body);
+
+    $pdo->beginTransaction();
+    try {
+        $orderId = (string) ($body['id'] ?? ('ord-' . time() . '-' . random_int(100, 999)));
+        $existing = $pdo->prepare('SELECT id FROM orders WHERE id = :id');
+        $existing->execute(['id' => $orderId]);
+        if ($existing->fetchColumn()) {
+            // A repeat of the same order replaces the ticket and its lines.
+            $clear = $pdo->prepare('DELETE FROM order_items WHERE order_id = :id');
+            $clear->execute(['id' => $orderId]);
+            h_update($pdo, 'orders', $orderId, $body);
+        } else {
+            $orderId = h_insert($pdo, $table, $body);
+        }
+        foreach (array_values($lines) as $index => $line) {
+            if (!is_array($line)) continue;
+            $wanted = (string) ($line['id'] ?? '');
+            h_insert($pdo, 'order_items', [
+                'id' => h_unique_line_id($pdo, $orderId, $wanted, $index),
+                'order_id' => $orderId,
+                'menu_item_id' => (string) ($line['menuItemId'] ?? $line['menu_item_id'] ?? ''),
+                'name' => (string) ($line['name'] ?? 'Item'),
+                'quantity' => max(1, (int) ($line['quantity'] ?? 1)),
+                'price' => (float) ($line['price'] ?? 0),
+                'modifiers' => $line['modifiers'] ?? [],
+                'station' => (string) ($line['station'] ?? 'Kitchen'),
+            ]);
+        }
+        $pdo->commit();
+    } catch (Throwable $exception) {
+        $pdo->rollBack();
+        throw $exception;
+    }
+    return $orderId;
+}
+
+/**
+ * The order a list is returned in.
+ *
+ * A table that records when a row was written is returned newest first, so a
+ * limit never hides the entries that were just added. Every other table keeps
+ * a stable order by its first column.
+ */
+function h_list_order(string $table): string {
+    $newestFirst = [
+        'orders' => 'created_at',
+        'payments' => 'created_at',
+        'order_items' => 'id',
+        'reservations' => 'created_at',
+        'public_bookings' => 'created_at',
+        'audit_logs' => 'timestamp',
+        'stock_movements' => 'timestamp',
+        'guests' => 'created_at',
+        'users' => 'id',
+        'maintenance_tickets' => 'created_at',
+        'purchase_orders' => 'created_at',
+        'requisitions' => 'created_at',
+        'transfers' => 'created_at',
+        'stock_alerts' => 'created_at',
+        'feedback' => 'created_at',
+    ];
+    if (isset($newestFirst[$table])) return '`'.$newestFirst[$table].'` DESC, `id` DESC';
+    return '`id` ASC';
+}
+
 function h_update(PDO $pdo, string $table, string $id, array $data): void {
-    $columns = h_table_columns($pdo, $table);
+    $types = h_table_column_types($pdo, $table);
     $payload = [];
     foreach ($data as $key => $value) {
         $column = h_snake((string) $key);
-        if (!in_array($column, $columns, true) || in_array($column, ['id', 'reference'], true)) continue;
-        if (is_array($value)) $value = json_encode($value, JSON_UNESCAPED_UNICODE);
-        if (is_bool($value)) $value = $value ? 1 : 0;
-        $payload[$column] = $value;
+        if (!array_key_exists($column, $types) || in_array($column, ['id', 'reference'], true)) continue;
+        $payload[$column] = h_column_value($value, $types[$column]);
     }
     if (!$payload) return;
     $assignments = [];
@@ -285,24 +548,81 @@ function h_error(string $message, string $code = 'VALIDATION', int $status = 400
 }
 
 // Health and auth
-if ($route === '/health' && $method === 'GET') hayata_json(['ok' => true, 'database' => 'hayata_data', 'time' => date('c')]);
+if ($route === '/health' && $method === 'GET') hayata_json(['ok' => true, 'database' => hayata_config()['db_name'], 'time' => date('c'), 'environment' => hayata_config()['app_env']]);
 
 if ($route === '/auth/login' && $method === 'POST') {
+    $config = hayata_config();
+    $email = strtolower(trim((string) ($body['email'] ?? '')));
+    $password = (string) ($body['password'] ?? '');
+
+    // Sign-in attempts are throttled per address and per account.
+    hayata_rate_limit($pdo, 'login:ip:' . hayata_client_ip(), $config['login_max_attempts'] * 3, $config['login_lockout']);
+    hayata_rate_limit($pdo, 'login:user:' . $email, $config['login_max_attempts'], $config['login_lockout']);
+
+    if ($email === '' || $password === '') h_error('Enter your email address and password.', 'VALIDATION', 422);
+    if (strlen($password) > 200) h_error('Invalid email or password.', 'UNAUTHORIZED', 401);
+
     $statement = $pdo->prepare('SELECT u.*, r.name AS role, r.label AS role_label FROM users u JOIN roles r ON r.id = u.role_id WHERE u.email = :email');
-    $statement->execute(['email' => $body['email'] ?? '']);
+    $statement->execute(['email' => $email]);
     $user = $statement->fetch();
-    if (!$user || !password_verify((string) ($body['password'] ?? ''), $user['password_hash'])) h_error('Invalid email or password.', 'UNAUTHORIZED', 401);
+
+    // Always run a hash comparison so a missing account and a wrong password
+    // take the same amount of time.
+    $hash = $user['password_hash'] ?? '$2y$10$invalidinvalidinvalidinvalidinvalidinvalidinvalidinvalidin';
+    $valid = password_verify($password, $hash) && $user;
+    if (!$valid) h_error('Invalid email or password.', 'UNAUTHORIZED', 401);
+    if (($user['status'] ?? '') !== 'Active') h_error('This account is not active.', 'ACCOUNT_DISABLED', 403);
+
+    // Transparently upgrade the hash when the algorithm or cost changed.
+    if (password_needs_rehash($user['password_hash'], PASSWORD_DEFAULT)) {
+        h_update($pdo, 'users', $user['id'], ['password_hash' => password_hash($password, PASSWORD_DEFAULT)]);
+    }
+
     $token = bin2hex(random_bytes(32));
-    h_insert($pdo, 'api_tokens', ['token' => $token, 'user_id' => $user['id'], 'expires_at' => date('Y-m-d H:i:s', time() + 86400)]);
-    hayata_json(['token' => $token, 'user' => [
+    h_insert($pdo, 'api_tokens', [
+        'token' => hayata_token_hash($token),
+        'user_id' => $user['id'],
+        'created_at' => date('Y-m-d H:i:s'),
+        'expires_at' => date('Y-m-d H:i:s', time() + $config['token_ttl']),
+    ]);
+    h_update($pdo, 'users', $user['id'], ['last_active' => 'Just now']);
+    hayata_json(['token' => $token, 'expiresAt' => date('c', time() + $config['token_ttl']), 'user' => [
         'id' => $user['id'], 'name' => $user['name'], 'email' => $user['email'], 'role' => $user['role'],
         'department' => $user['department'], 'status' => $user['status'], 'lastActive' => $user['last_active'],
     ]]);
 }
 
+if ($route === '/auth/logout' && $method === 'POST') {
+    // The token must be read the same way the session lookup reads it, or the
+    // DELETE would match no rows and the session would stay alive.
+    $token = hayata_bearer_token();
+    if ($token !== null) {
+        $statement = $pdo->prepare('DELETE FROM api_tokens WHERE token = :token');
+        $statement->execute(['token' => hayata_token_hash($token)]);
+    }
+    hayata_json(['ok' => true]);
+}
+
 if ($route === '/auth/me' && $method === 'GET') {
     $user = hayata_require_user($pdo);
     hayata_json(['user' => h_camel_keys($user)]);
+}
+
+if ($route === '/auth/password' && $method === 'POST') {
+    $user = hayata_require_user($pdo);
+    $current = (string) ($body['currentPassword'] ?? '');
+    $next = (string) ($body['newPassword'] ?? '');
+    if (strlen($next) < 10) h_error('Use at least 10 characters for the new password.', 'VALIDATION', 422);
+    if (!preg_match('/[A-Za-z]/', $next) || !preg_match('/[0-9]/', $next)) h_error('The new password must contain letters and numbers.', 'VALIDATION', 422);
+    $statement = $pdo->prepare('SELECT password_hash FROM users WHERE id = :id');
+    $statement->execute(['id' => $user['id']]);
+    $hash = (string) $statement->fetchColumn();
+    if (!password_verify($current, $hash)) h_error('Your current password is not correct.', 'UNAUTHORIZED', 401);
+    h_update($pdo, 'users', $user['id'], ['password_hash' => password_hash($next, PASSWORD_DEFAULT)]);
+    // Every other session for this account is invalidated.
+    $revoke = $pdo->prepare('DELETE FROM api_tokens WHERE user_id = :user_id');
+    $revoke->execute(['user_id' => $user['id']]);
+    hayata_json(['ok' => true]);
 }
 
 // Public room types
@@ -379,7 +699,15 @@ if ($route === '/public/bookings' && $method === 'POST') {
         }
         h_error('Sorry, that room was just taken. Please choose another room.', 'CONFLICT', 409, ['availableRooms' => $alternatives]);
     }
-    $guest = $body['guest'] ?? [];
+    $guest = is_array($body['guest'] ?? null) ? $body['guest'] : [];
+    // Free-text fields are cleaned before they are stored, so a payload can
+    // never carry markup into a staff screen.
+    foreach (['firstName', 'lastName', 'email', 'phone', 'country', 'notes', 'requests'] as $field) {
+        if (isset($guest[$field]) && is_string($guest[$field])) $guest[$field] = hayata_clean_text($guest[$field]);
+    }
+    if (!empty($guest['email']) && !filter_var((string) $guest['email'], FILTER_VALIDATE_EMAIL)) {
+        h_error('Enter a valid email address.');
+    }
     if (empty($guest['acceptTerms'])) h_error('Please accept the booking terms.', 'VALIDATION');
     do { $reference = hayata_reference(); $check = $pdo->prepare('SELECT COUNT(*) FROM public_bookings WHERE reference = :ref'); $check->execute(['ref' => $reference]); } while ($check->fetchColumn() > 0);
     $quote = h_quote_from_data($roomType, $checkIn, $checkOut, $body['addOns'] ?? [], $body['promoCode'] ?? null, (int) ($body['adults'] ?? 1) + (int) ($body['children'] ?? 0));
@@ -414,6 +742,8 @@ if (preg_match('#^/public/bookings/([^/]+)/pay$#', $route, $matches) && $method 
     if (!$booking) h_error('Booking not found.', 'NOT_FOUND', 404);
     h_update($pdo, 'public_bookings', $reference, ['status' => 'CONFIRMED', 'payment_status' => 'PAID']);
     h_update($pdo, 'reservations', $booking['staff_reservation_id'], ['status' => 'Confirmed']);
+    // The guest receives the booking confirmation by email.
+    hayata_notify_reservation_event($pdo, 'booking_confirmed', (string) $booking['staff_reservation_id']);
     $statement->execute(['ref' => $reference]);
     hayata_json(h_public_booking($pdo, $statement->fetch()));
 }
@@ -624,12 +954,41 @@ if ($route === '/public/room-orders' && $method === 'POST') {
     $statement = $pdo->prepare('SELECT * FROM orders WHERE id = :id');
     $statement->execute(['id' => $orderId]);
     $order = h_attach_order_items($pdo, [h_decode_row($statement->fetch())])[0];
-    hayata_json(['order' => $order, 'paymentReference' => $reference], 201);
+
+    // The guest receives their confirmation by email. A mail failure never
+    // invalidates the order that was already paid for and sent to the kitchen.
+    $notification = ['sent' => false, 'skipped' => true];
+    try {
+        $settings = hayata_notification_settings($pdo);
+        if ($settings['enabled'] && ($settings['events']['order_placed'] ?? false) && $email !== '') {
+            $message = hayata_email_body('order_placed', [
+                'guestName' => $quote['guestName'],
+                'email' => $email,
+                'orderNumber' => $order['orderNumber'] ?? $order['order_number'] ?? '',
+                'roomNumber' => $quote['roomNumber'],
+                'total' => '₦' . number_format((float) $quote['total'], 2),
+                'eta' => '25',
+            ]);
+            $result = hayata_send_email($pdo, $settings, $email, $message['subject'], $message['text'], $message['html']);
+            $notification = ['sent' => (bool) $result['ok'], 'error' => $result['error'] ?? null];
+        }
+    } catch (Throwable $exception) {
+        $notification = ['sent' => false, 'error' => 'The confirmation email could not be sent.'];
+    }
+
+    hayata_json(['order' => $order, 'paymentReference' => $reference, 'notification' => $notification], 201);
 }
 
 if ($route === '/public/enquiries' && $method === 'POST') {
     if (empty($body['name']) || empty($body['email']) || empty($body['message'])) h_error('Please complete all required fields.');
-    h_insert($pdo, 'public_enquiries', ['name' => $body['name'], 'email' => $body['email'], 'subject' => $body['subject'] ?? 'General enquiry', 'message' => $body['message']]);
+    if (!filter_var((string) $body['email'], FILTER_VALIDATE_EMAIL)) h_error('Enter a valid email address.');
+    if (mb_strlen((string) $body['message']) > 5000) h_error('Your message is too long.');
+    h_insert($pdo, 'public_enquiries', [
+        'name' => hayata_clean_text((string) $body['name']),
+        'email' => hayata_clean_text((string) $body['email']),
+        'subject' => hayata_clean_text((string) ($body['subject'] ?? 'General enquiry')),
+        'message' => hayata_clean_text((string) $body['message']),
+    ]);
     hayata_json(['ok' => true], 201);
 }
 
@@ -645,17 +1004,22 @@ if ($route === '/public/newsletter' && $method === 'POST') {
 if (preg_match('#^/reservations/([^/]+)/status$#', $route, $matches) && $method === 'POST') {
     hayata_require_permission($pdo, 'reservation.edit');
     $id = $matches[1];
-    h_update($pdo, 'reservations', $id, ['status' => $body['status'] ?? 'Confirmed', 'room_number' => $body['roomNumber'] ?? null]);
-    if (($body['status'] ?? '') === 'Checked in' && !empty($body['roomNumber'])) {
+    $status = (string) ($body['status'] ?? 'Confirmed');
+    h_update($pdo, 'reservations', $id, ['status' => $status, 'room_number' => $body['roomNumber'] ?? null]);
+    if ($status === 'Checked in' && !empty($body['roomNumber'])) {
         $statement = $pdo->prepare('SELECT guest_name FROM reservations WHERE id = :id');
         $statement->execute(['id' => $id]);
         $guestName = $statement->fetchColumn();
         $roomStatement = $pdo->prepare('UPDATE rooms SET status = \'Occupied\', guest_name = :guest WHERE number = :number');
         $roomStatement->execute(['guest' => $guestName, 'number' => $body['roomNumber']]);
     }
+    // The guest is notified about the stay, never about internal changes.
+    $notification = ['sent' => false, 'skipped' => true];
+    if ($status === 'Checked in') $notification = hayata_notify_reservation_event($pdo, 'checked_in', $id);
+    if ($status === 'Checked out') $notification = hayata_notify_reservation_event($pdo, 'checked_out', $id);
     $statement = $pdo->prepare('SELECT * FROM reservations WHERE id = :id');
     $statement->execute(['id' => $id]);
-    hayata_json(h_decode_row($statement->fetch()));
+    hayata_json(array_merge(h_decode_row($statement->fetch()), ['notification' => $notification]));
 }
 
 if (preg_match('#^/orders/([^/]+)/status$#', $route, $matches) && $method === 'POST') {
@@ -688,6 +1052,174 @@ if ($route === '/printer-settings' && $method === 'PUT') {
     $statement = $pdo->prepare("UPDATE printer_settings SET setting_value = :value WHERE setting_key = 'default'");
     $statement->execute(['value' => json_encode($body, JSON_UNESCAPED_UNICODE)]);
     hayata_json($body);
+}
+
+// Guest notifications (SMTP)
+if ($route === '/notifications/settings' && $method === 'GET') {
+    hayata_require_permission($pdo, 'settings.manage');
+    hayata_json(hayata_notification_settings_public(hayata_notification_settings($pdo)));
+}
+if ($route === '/notifications/settings' && $method === 'PUT') {
+    hayata_require_permission($pdo, 'settings.manage');
+    $current = hayata_notification_settings($pdo);
+    $events = hayata_notification_events();
+    $requested = (array) ($body['events'] ?? []);
+    $cleanEvents = [];
+    foreach ($events as $key => $label) {
+        $cleanEvents[$key] = array_key_exists($key, $requested) ? (bool) $requested[$key] : (bool) ($current['events'][$key] ?? true);
+    }
+    $password = trim((string) ($body['password'] ?? ''));
+    $settings = [
+        'enabled' => (bool) ($body['enabled'] ?? $current['enabled']),
+        'transport' => in_array(strtolower((string) ($body['transport'] ?? $current['transport'])), ['mail', 'smtp'], true)
+            ? strtolower((string) ($body['transport'] ?? $current['transport'])) : 'mail',
+        'host' => hayata_clean_text((string) ($body['host'] ?? $current['host'])),
+        'port' => max(1, min(65535, (int) ($body['port'] ?? $current['port']))),
+        'username' => hayata_clean_text((string) ($body['username'] ?? $current['username'])),
+        // An empty password means "keep the stored one"; a value is never returned.
+        'password' => $password !== '' ? $password : (string) $current['password'],
+        'secure' => in_array(strtolower((string) ($body['secure'] ?? $current['secure'])), ['tls', 'ssl', 'none'], true)
+            ? strtolower((string) ($body['secure'] ?? $current['secure'])) : 'tls',
+        'fromEmail' => hayata_clean_text((string) ($body['fromEmail'] ?? $current['fromEmail'])),
+        'fromName' => hayata_clean_text((string) ($body['fromName'] ?? $current['fromName'])),
+        'events' => $cleanEvents,
+    ];
+    if ($settings['transport'] === 'smtp' && $settings['host'] === '') h_error('Enter the SMTP server address.', 'VALIDATION', 422);
+    if ($settings['fromEmail'] !== '' && !filter_var($settings['fromEmail'], FILTER_VALIDATE_EMAIL)) {
+        h_error('Enter a valid sender email address.', 'VALIDATION', 422);
+    }
+    hayata_save_notification_settings($pdo, $settings);
+    hayata_json(hayata_notification_settings_public($settings));
+}
+if ($route === '/notifications/test' && $method === 'POST') {
+    hayata_require_permission($pdo, 'settings.manage');
+    $settings = hayata_notification_settings($pdo);
+    $recipient = trim((string) ($body['email'] ?? ''));
+    if ($recipient === '') $recipient = trim((string) ($body['fromEmail'] ?? ''));
+    if (!filter_var($recipient, FILTER_VALIDATE_EMAIL)) h_error('Enter a valid test email address.', 'VALIDATION', 422);
+    $message = hayata_email_body('order_placed', [
+        'guestName' => 'Hayata',
+        'message' => 'This is a test message from your Hayata HMS notification settings.',
+        'total' => '₦0.00',
+    ]);
+    $result = hayata_send_email($pdo, $settings, $recipient, '[Test] ' . $message['subject'], $message['text'], $message['html']);
+    hayata_json($result, $result['ok'] ? 200 : 502);
+}
+if ($route === '/notifications/send' && $method === 'POST') {
+    $user = hayata_require_user($pdo);
+    $event = (string) ($body['event'] ?? '');
+    if (!array_key_exists($event, hayata_notification_events())) h_error('Unknown notification event.', 'VALIDATION', 422);
+    $settings = hayata_notification_settings($pdo);
+    if (!$settings['enabled'] || !($settings['events'][$event] ?? false)) {
+        hayata_json(['sent' => false, 'skipped' => true, 'reason' => 'This notification is switched off.']);
+    }
+    $recipient = trim((string) ($body['email'] ?? ''));
+    if (!filter_var($recipient, FILTER_VALIDATE_EMAIL)) h_error('Enter a valid recipient email address.', 'VALIDATION', 422);
+    $data = is_array($body['data'] ?? null) ? $body['data'] : [];
+    $message = hayata_email_body($event, $data);
+    $result = hayata_send_email($pdo, $settings, $recipient, $message['subject'], $message['text'], $message['html']);
+    if (!$result['ok']) hayata_json(['sent' => false, 'error' => $result['error']], 502);
+    hayata_json(['sent' => true, 'recipient' => $recipient, 'sentBy' => $user['id']]);
+}
+if ($route === '/notifications/log' && $method === 'GET') {
+    hayata_require_permission($pdo, 'settings.manage');
+    $limit = min(200, max(1, (int) ($query['limit'] ?? 50)));
+    $rows = $pdo->query("SELECT id, recipient, subject, event, status, error, created_at FROM email_log ORDER BY created_at DESC LIMIT $limit")->fetchAll();
+    hayata_json(h_decode_rows($rows));
+}
+
+// Full activity log for the dashboard.
+//
+// The list is filtered and counted on the server so the dashboard can show
+// every recorded action, not only the first page of rows.
+if ($route === '/audit-logs' && $method === 'GET') {
+    hayata_require_user($pdo);
+    $limit = min(1000, max(1, (int) ($query['limit'] ?? 300)));
+    $conditions = [];
+    $params = [];
+
+    $module = trim((string) ($query['module'] ?? ''));
+    if ($module !== '') { $conditions[] = 'module = :module'; $params['module'] = $module; }
+    $actor = trim((string) ($query['actor'] ?? ''));
+    if ($actor !== '') { $conditions[] = 'actor = :actor'; $params['actor'] = $actor; }
+    $action = trim((string) ($query['action'] ?? ''));
+    if ($action !== '') { $conditions[] = 'action = :action'; $params['action'] = $action; }
+    $from = trim((string) ($query['from'] ?? ''));
+    if ($from !== '' && preg_match('/^\d{4}-\d{2}-\d{2}$/', $from)) { $conditions[] = 'timestamp >= :from'; $params['from'] = $from . ' 00:00:00'; }
+    $to = trim((string) ($query['to'] ?? ''));
+    if ($to !== '' && preg_match('/^\d{4}-\d{2}-\d{2}$/', $to)) { $conditions[] = 'timestamp <= :to'; $params['to'] = $to . ' 23:59:59'; }
+    $search = trim((string) ($query['q'] ?? ''));
+    if ($search !== '') {
+        // MySQL native prepared statements cannot reuse a named placeholder,
+        // so every column gets its own parameter.
+        $conditions[] = '(actor LIKE :search_actor OR action LIKE :search_action OR module LIKE :search_module OR detail LIKE :search_detail OR ip_address LIKE :search_ip)';
+        $params['search_actor'] = '%' . $search . '%';
+        $params['search_action'] = '%' . $search . '%';
+        $params['search_module'] = '%' . $search . '%';
+        $params['search_detail'] = '%' . $search . '%';
+        $params['search_ip'] = '%' . $search . '%';
+    }
+
+    $where = $conditions ? ' WHERE ' . implode(' AND ', $conditions) : '';
+    $statement = $pdo->prepare("SELECT id, timestamp, actor, module, action, detail, ip_address FROM audit_logs$where ORDER BY timestamp DESC, id DESC LIMIT $limit");
+    $statement->execute($params);
+    $entries = h_decode_rows($statement->fetchAll());
+
+    // The counters describe the whole filtered set, not just the returned page.
+    $countStatement = $pdo->prepare("SELECT COUNT(*) FROM audit_logs$where");
+    $countStatement->execute($params);
+    $total = (int) $countStatement->fetchColumn();
+
+    $groupStatement = $pdo->prepare("SELECT module, COUNT(*) AS hits FROM audit_logs$where GROUP BY module ORDER BY hits DESC");
+    $groupStatement->execute($params);
+    $byModule = array_map(
+        fn(array $row): array => ['name' => (string) $row['module'], 'count' => (int) $row['hits']],
+        $groupStatement->fetchAll()
+    );
+    $actorStatement = $pdo->prepare("SELECT actor, COUNT(*) AS hits FROM audit_logs$where GROUP BY actor ORDER BY hits DESC LIMIT 12");
+    $actorStatement->execute($params);
+    $byActor = array_map(
+        fn(array $row): array => ['name' => (string) $row['actor'], 'count' => (int) $row['hits']],
+        $actorStatement->fetchAll()
+    );
+    $actionStatement = $pdo->prepare("SELECT action, COUNT(*) AS hits FROM audit_logs$where GROUP BY action ORDER BY hits DESC LIMIT 12");
+    $actionStatement->execute($params);
+    $byAction = array_map(
+        fn(array $row): array => ['name' => (string) $row['action'], 'count' => (int) $row['hits']],
+        $actionStatement->fetchAll()
+    );
+
+    $dayStatement = $pdo->prepare("SELECT DATE(timestamp) AS day, COUNT(*) AS hits FROM audit_logs$where GROUP BY DATE(timestamp) ORDER BY day DESC LIMIT 14");
+    $dayStatement->execute($params);
+    $byDay = array_map(
+        fn(array $row): array => ['day' => (string) $row['day'], 'count' => (int) $row['hits']],
+        $dayStatement->fetchAll()
+    );
+
+    // The "today" counter adds its own condition, so it needs a WHERE clause
+    // of its own when no other filter is active.
+    $todayConditions = $conditions;
+    $todayConditions[] = 'DATE(timestamp) = CURDATE()';
+    $todayStatement = $pdo->prepare('SELECT COUNT(*) FROM audit_logs WHERE ' . implode(' AND ', $todayConditions));
+    $todayStatement->execute($params);
+    $today = (int) $todayStatement->fetchColumn();
+
+    hayata_json([
+        'entries' => $entries,
+        'stats' => [
+            'total' => $total,
+            'today' => $today,
+            'returned' => count($entries),
+            'actors' => count($byActor),
+            'modules' => count($byModule),
+            'topModule' => $byModule[0]['name'] ?? '',
+            'topActor' => $byActor[0]['name'] ?? '',
+            'byModule' => $byModule,
+            'byActor' => $byActor,
+            'byAction' => $byAction,
+            'byDay' => $byDay,
+        ],
+    ]);
 }
 
 // Bootstrap bundle for staff hydration
@@ -733,9 +1265,12 @@ if (preg_match('#^/resource/([a-z-]+)(?:/([^/]+))?$#', $route, $matches)) {
 
     if ($method === 'GET' && !$id) {
         $limit = min(500, max(1, (int) ($query['limit'] ?? 200)));
-        $rows = h_decode_rows($pdo->query("SELECT * FROM `$table` ORDER BY 1 LIMIT $limit")->fetchAll());
+        $rows = h_decode_rows($pdo->query("SELECT * FROM `$table` ORDER BY " . h_list_order($table) . " LIMIT $limit")->fetchAll());
         if ($table === 'orders') $rows = h_attach_order_items($pdo, $rows);
         if ($table === 'menu_items') $rows = h_normalize_menu_items($rows);
+        // The staff directory only exposes the columns the screen needs, and
+        // never the password hash.
+        if ($table === 'users') $rows = array_map('h_public_user', $rows);
         hayata_json($rows);
     }
     if ($method === 'GET' && $id) {
@@ -746,6 +1281,15 @@ if (preg_match('#^/resource/([a-z-]+)(?:/([^/]+))?$#', $route, $matches)) {
         $decoded = h_decode_row($row);
         if ($table === 'orders') $decoded = h_attach_order_items($pdo, [$decoded])[0];
         if ($table === 'menu_items') $decoded = h_normalize_menu_item($decoded);
+        // A member of staff may read their own record; reading anyone else's
+        // record needs the staff permission.
+        if ($table === 'users') {
+            $caller = hayata_require_user($pdo);
+            if ($id !== $caller['id'] && !hayata_has_permission($pdo, $caller['id'], 'staff.view')) {
+                h_error('You can only view your own account.', 'FORBIDDEN', 403);
+            }
+            $decoded = h_public_user($decoded);
+        }
         hayata_json($decoded);
     }
     // Orders, their lines and the menu are edited by F&B staff (waiters, bartenders,
@@ -758,9 +1302,9 @@ if (preg_match('#^/resource/([a-z-]+)(?:/([^/]+))?$#', $route, $matches)) {
 
     if ($method === 'POST') {
         if (isset($resourcePermissions[$table])) {
-            hayata_require_permission($pdo, $resourcePermissions[$table]);
+            $caller = hayata_require_permission($pdo, $resourcePermissions[$table]);
         } else {
-            hayata_require_permission($pdo, 'settings.manage');
+            $caller = hayata_require_permission($pdo, 'settings.manage');
         }
         if ($table === 'users') {
             $email = trim((string) ($body['email'] ?? ''));
@@ -784,21 +1328,35 @@ if (preg_match('#^/resource/([a-z-]+)(?:/([^/]+))?$#', $route, $matches)) {
                 'last_active' => $body['lastActive'] ?? 'Just now',
             ]);
         } else {
-            $newId = h_insert($pdo, $table, $body);
+            $newId = h_insert_order_with_lines($pdo, $table, $body);
         }
         $statement = $pdo->prepare("SELECT * FROM `$table` WHERE id = :id");
         $statement->execute(['id' => $newId]);
         $created = h_decode_row($statement->fetch() ?: $body);
         if ($table === 'menu_items') $created = h_normalize_menu_item($created);
+        if ($table === 'users') $created = h_public_user($created);
+        // A ticket without its lines is useless in the kitchen, so the created
+        // order is returned with the items that were written with it.
+        if ($table === 'orders') $created = h_attach_order_items($pdo, [$created])[0];
+        h_audit($pdo, $caller ?? hayata_require_user($pdo), 'Created', ucfirst(str_replace('_', ' ', $table)), $newId, 'New ' . str_replace('_', ' ', $table) . ' record · ' . h_changed_fields($body));
+        // A confirmed booking tells the guest straight away.
+        if ($table === 'reservations' && in_array((string) ($body['status'] ?? ''), ['Confirmed', 'Pending'], true)) {
+            hayata_notify_reservation_event($pdo, 'booking_confirmed', $newId);
+        }
         hayata_json($created, 201);
     }
     if ($method === 'PUT' && $id) {
         if (isset($resourcePermissions[$table])) {
-            hayata_require_permission($pdo, $resourcePermissions[$table]);
+            $caller = hayata_require_permission($pdo, $resourcePermissions[$table]);
         } else {
-            hayata_require_permission($pdo, 'settings.manage');
+            $caller = hayata_require_permission($pdo, 'settings.manage');
         }
         if ($table === 'users') {
+            // A member of staff may only edit their own account, and never their role.
+            $isSelf = $id === $caller['id'];
+            if (!$isSelf && !hayata_has_permission($pdo, $caller['id'], 'staff.manage')) {
+                h_error('You can only edit your own account.', 'FORBIDDEN', 403);
+            }
             $email = trim((string) ($body['email'] ?? ''));
             if ($email !== '') {
                 $duplicate = $pdo->prepare('SELECT COUNT(*) FROM users WHERE email = :email AND id <> :id');
@@ -812,31 +1370,59 @@ if (preg_match('#^/resource/([a-z-]+)(?:/([^/]+))?$#', $route, $matches)) {
                 'status' => $body['status'] ?? null,
                 'last_active' => $body['lastActive'] ?? null,
             ];
-            if (isset($body['role']) || isset($body['roleId'])) {
-                $role = strtolower((string) ($body['role'] ?? $body['roleId']));
-                $roleCheck = $pdo->prepare('SELECT id FROM roles WHERE id = :id');
-                $roleCheck->execute(['id' => $role]);
-                if ($roleCheck->fetchColumn()) $payload['role_id'] = $role;
+            if (!$isSelf) {
+                if (isset($body['role']) || isset($body['roleId'])) {
+                    $role = strtolower((string) ($body['role'] ?? $body['roleId']));
+                    $roleCheck = $pdo->prepare('SELECT id FROM roles WHERE id = :id');
+                    $roleCheck->execute(['id' => $role]);
+                    if ($roleCheck->fetchColumn()) $payload['role_id'] = $role;
+                }
+                if (!empty($body['password'])) {
+                    $newPassword = (string) $body['password'];
+                    if (strlen($newPassword) < 10) h_error('Use at least 10 characters for the password.', 'VALIDATION', 422);
+                    $payload['password_hash'] = password_hash($newPassword, PASSWORD_DEFAULT);
+                }
             }
-            if (!empty($body['password'])) $payload['password_hash'] = password_hash((string) $body['password'], PASSWORD_DEFAULT);
             h_update($pdo, $table, $id, array_filter($payload, fn($value) => $value !== null));
+            $changed = $payload;
         } else {
             h_update($pdo, $table, $id, $body);
+            $changed = $body;
         }
         $statement = $pdo->prepare("SELECT * FROM `$table` WHERE id = :id");
         $statement->execute(['id' => $id]);
         $updated = h_decode_row($statement->fetch() ?: $body);
         if ($table === 'menu_items') $updated = h_normalize_menu_item($updated);
+        if ($table === 'users') $updated = h_public_user($updated);
+        h_audit($pdo, $caller, 'Updated', ucfirst(str_replace('_', ' ', $table)), $id, 'Changed: ' . h_changed_fields($changed));
         hayata_json($updated);
     }
     if ($method === 'DELETE' && $id) {
         if (isset($resourcePermissions[$table])) {
-            hayata_require_permission($pdo, $resourcePermissions[$table]);
+            $caller = hayata_require_permission($pdo, $resourcePermissions[$table]);
         } else {
-            hayata_require_permission($pdo, 'settings.manage');
+            $caller = hayata_require_permission($pdo, 'settings.manage');
         }
-        $statement = $pdo->prepare("DELETE FROM `$table` WHERE id = :id");
-        $statement->execute(['id' => $id]);
+        if ($table === 'users' && $id === $caller['id']) {
+            h_error('You cannot delete your own account.', 'VALIDATION', 422);
+        }
+        // The lines of an order are tied to it by a foreign key, so they have
+        // to go first. Otherwise deleting a ticket fails on the constraint and
+        // the order stays in the kitchen.
+        $pdo->beginTransaction();
+        try {
+            if ($table === 'orders') {
+                $lines = $pdo->prepare('DELETE FROM order_items WHERE order_id = :id');
+                $lines->execute(['id' => $id]);
+            }
+            $statement = $pdo->prepare("DELETE FROM `$table` WHERE id = :id");
+            $statement->execute(['id' => $id]);
+            $pdo->commit();
+        } catch (Throwable $exception) {
+            $pdo->rollBack();
+            throw $exception;
+        }
+        h_audit($pdo, $caller, 'Deleted', ucfirst(str_replace('_', ' ', $table)), $id, 'Record removed');
         hayata_json(['ok' => true]);
     }
 }

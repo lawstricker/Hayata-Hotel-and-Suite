@@ -16,6 +16,7 @@ dist-ssr
 .env
 .env.*
 !.env.example
+server/php/config.local.php
 
 # Local OpenCode tooling and generated skills
 .opencode/

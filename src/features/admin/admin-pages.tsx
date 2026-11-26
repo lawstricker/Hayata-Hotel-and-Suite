@@ -1,5 +1,5 @@
 import { zodResolver } from '@hookform/resolvers/zod'
-import { Building2, CalendarDays, Check, CheckCircle2, Clock3, Copy, Download, FileClock, Pencil, Plus, RotateCcw, Save, ShieldCheck, Trash2, UserRound, Users } from 'lucide-react'
+import { Building2, CalendarDays, Check, CheckCircle2, Clock3, Copy, Download, FileClock, Mail, Pencil, Plus, RotateCcw, Save, ShieldCheck, Trash2, UserRound, Users } from 'lucide-react'
 import { useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { useSearchParams } from 'react-router-dom'
@@ -15,6 +15,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { DataTable, type DataTableColumn } from '@/components/common/data-table'
 import { KitchenPrinterSettings } from '@/features/admin/printer-settings'
 import { PaymentGatewaySettings } from '@/features/admin/payment-settings'
+import { SmtpSettingsPanel } from '@/features/admin/smtp-settings-panel'
 import { KpiCard } from '@/components/common/kpi-card'
 import { PageHeader } from '@/components/common/page-header'
 import { StatusPill } from '@/components/common/status-pill'
@@ -458,6 +459,7 @@ export function SettingsPage() {
           <TabsTrigger value="taxes">Taxes & currency</TabsTrigger>
           <TabsTrigger value="printer">Kitchen printer</TabsTrigger>
           <TabsTrigger value="payments">Payment gateway</TabsTrigger>
+          <TabsTrigger value="smtp"><Mail /> SMTP & email</TabsTrigger>
           <TabsTrigger value="notifications">Notifications</TabsTrigger>
           <TabsTrigger value="seo">SEO</TabsTrigger>
           {canManageRoles && <TabsTrigger value="roles">Roles & permissions</TabsTrigger>}
@@ -513,6 +515,7 @@ export function SettingsPage() {
         <TabsContent value="seo"><SeoSettingsPanel /></TabsContent>
         <TabsContent value="printer"><KitchenPrinterSettings /></TabsContent>
         <TabsContent value="payments"><PaymentGatewaySettings /></TabsContent>
+        <TabsContent value="smtp"><SmtpSettingsPanel /></TabsContent>
 
         <TabsContent value="notifications">
           <Card>

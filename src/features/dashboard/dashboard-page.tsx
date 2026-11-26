@@ -34,6 +34,7 @@ import {
   Wrench,
   type LucideIcon,
 } from 'lucide-react'
+import { useEffect, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
@@ -42,13 +43,15 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { KpiCard } from '@/components/common/kpi-card'
 import { LiveIndicator } from '@/components/common/live-indicator'
 import { StatusPill } from '@/components/common/status-pill'
-import { activities, menuItems, occupancyTrend, revenueTrend } from '@/mock/data'
+import { menuItems, occupancyTrend, revenueTrend } from '@/mock/data'
 import { mockApi } from '@/mock/api'
 import { useAuthStore } from '@/store/authStore'
 import { useHotelStore } from '@/store/hotelStore'
 import { cn, downloadCsv, formatCurrency } from '@/lib/utils'
 import { roleLabels } from '@/lib/rbac'
-import type { Role } from '@/types/domain'
+import { loadAuditLogs } from '@/lib/audit-log-api'
+import { ActivityLogPanel } from '@/features/dashboard/activity-log-panel'
+import type { AuditLog, Role } from '@/types/domain'
 
 interface Metric {
   label: string
@@ -131,6 +134,16 @@ export function DashboardPage() {
     { name: 'Bar', value: 11 },
     { name: 'Events', value: 6 },
   ]
+
+  // The activity timeline uses the same live trail as the full log section.
+  const [recentActivity, setRecentActivity] = useState<AuditLog[]>([])
+  useEffect(() => {
+    let active = true
+    void loadAuditLogs({ limit: 5 }).then((result) => {
+      if (active) setRecentActivity(result.entries)
+    })
+    return () => { active = false }
+  }, [])
 
   if (isLoading) return <DashboardSkeleton />
   const role = user?.role ?? 'SUPER_ADMIN'
@@ -235,12 +248,15 @@ export function DashboardPage() {
           <CardHeader><CardTitle>Recent activity</CardTitle><CardDescription>Live property timeline</CardDescription></CardHeader>
           <CardContent>
             <div className="space-y-4">
-              {activities.slice(0, 5).map((activity, index) => <div key={activity.id} className="relative flex gap-3"><div className="relative flex w-7 shrink-0 justify-center"><span className={cn('z-10 mt-1 size-2 rounded-full ring-4 ring-card', index === 0 ? 'bg-primary' : 'bg-slate-300 dark:bg-slate-600')} />{index < 4 && <span className="absolute bottom-[-18px] top-4 w-px bg-border" />}</div><div className="min-w-0 flex-1 pb-1"><p className="text-xs font-bold">{activity.title}</p><p className="truncate text-[11px] text-muted-foreground">{activity.description}</p><p className="mt-0.5 text-[10px] text-muted-foreground/75">{activity.actor} · {activity.timestamp}</p></div></div>)}
+              {recentActivity.map((activity, index) => <div key={activity.id} className="relative flex gap-3"><div className="relative flex w-7 shrink-0 justify-center"><span className={cn('z-10 mt-1 size-2 rounded-full ring-4 ring-card', index === 0 ? 'bg-primary' : 'bg-slate-300 dark:bg-slate-600')} />{index < recentActivity.length - 1 && <span className="absolute bottom-[-18px] top-4 w-px bg-border" />}</div><div className="min-w-0 flex-1 pb-1"><p className="text-xs font-bold">{activity.action}</p><p className="truncate text-[11px] text-muted-foreground">{activity.detail || activity.module}</p><p className="mt-0.5 text-[10px] text-muted-foreground/75">{activity.actor} · {activity.timestamp}</p></div></div>)}
+              {!recentActivity.length && <p className="text-xs text-muted-foreground">No activity recorded yet.</p>}
             </div>
             {outOfOrder.length > 0 && <div className="mt-5 rounded-lg border border-red-200 bg-red-50 p-3 dark:border-red-900 dark:bg-red-950/40"><p className="text-xs font-bold text-red-700 dark:text-red-300">{outOfOrder.length} room out of order</p><p className="mt-0.5 text-[11px] text-red-600/80 dark:text-red-300/70">Rooms {outOfOrder.map((room) => room.number).join(', ')}</p></div>}
           </CardContent>
         </Card>
       </div>
+
+      <ActivityLogPanel />
     </div>
   )
 }
