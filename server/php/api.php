@@ -78,7 +78,7 @@ function h_camel_keys(array $rows): array {
 }
 
 function h_decode_row(array $row): array {
-    $jsonFields = ['amenities','add_ons','preferences','notes','recipe','modifiers','guest','quote','instructions','setting_value'];
+    $jsonFields = ['amenities','add_ons','preferences','notes','recipe','modifiers','guest','quote','instructions','setting_value','gallery'];
     $boolFields = ['available','acknowledged','age_restricted','resolved'];
     foreach ($row as $key => $value) {
         if (in_array($key, $jsonFields, true) && is_string($value)) {
@@ -164,6 +164,42 @@ function h_normalize_menu_item(array $item): array {
 /** Normalises a list of menu items. */
 function h_normalize_menu_items(array $items): array {
     return array_map('h_normalize_menu_item', $items);
+}
+
+/**
+ * Normalises a room type so the JSON contract matches the TypeScript RoomType type.
+ *
+ * MySQL returns DECIMAL columns as strings, and the picture columns are stored
+ * as JSON or as a data URL, so the client would otherwise receive a string
+ * where it expects a number, and a string where it expects an array.
+ */
+function h_normalize_room_type(array $type): array {
+    $type['baseRate'] = h_num($type['baseRate'] ?? 0);
+    $type['capacity'] = (int) h_num($type['capacity'] ?? 0);
+    $type['totalRooms'] = (int) h_num($type['totalRooms'] ?? 0);
+    if (!is_array($type['amenities'] ?? null)) {
+        $type['amenities'] = is_string($type['amenities'] ?? null) ? (json_decode((string) $type['amenities'], true) ?: []) : [];
+    }
+    $type['amenities'] = array_values(array_filter(array_map('strval', $type['amenities'])));
+    if (!is_array($type['gallery'] ?? null)) {
+        $type['gallery'] = is_string($type['gallery'] ?? null) ? (json_decode((string) $type['gallery'], true) ?: []) : [];
+    }
+    $type['gallery'] = array_values(array_filter(array_map('strval', $type['gallery'])));
+    if (empty($type['image'])) $type['image'] = '';
+    return $type;
+}
+
+/**
+ * Normalises a room so the JSON contract matches the TypeScript Room type.
+ *
+ * The rate is a DECIMAL column, so MySQL hands it over as a string and the
+ * staff screen would show "185.00" instead of 185.
+ */
+function h_normalize_room(array $room): array {
+    $room['rate'] = h_num($room['rate'] ?? 0);
+    $room['floor'] = (int) h_num($room['floor'] ?? 0);
+    if (array_key_exists('guestName', $room) && $room['guestName'] === null) $room['guestName'] = null;
+    return $room;
 }
 
 /**
@@ -430,6 +466,21 @@ function h_update(PDO $pdo, string $table, string $id, array $data): void {
     $statement->execute();
 }
 
+/**
+ * Reports whether a room number is already taken by another room.
+ *
+ * The room number is the permanent identity of a room: it is the code in the
+ * in-room dining QR and the key the kitchen delivers to. Two rooms can never
+ * share one.
+ */
+function h_room_number_taken(PDO $pdo, string $number, ?string $exceptId = null): bool {
+    $statement = $pdo->prepare('SELECT id FROM rooms WHERE number = :number LIMIT 1');
+    $statement->execute(['number' => $number]);
+    $owner = $statement->fetchColumn();
+    if ($owner === false) return false;
+    return $exceptId === null || (string) $owner !== $exceptId;
+}
+
 function h_slug(string $name): string {
     return strtolower(trim(preg_replace('/[^a-z0-9]+/', '-', strtolower($name)), '-'));
 }
@@ -440,16 +491,27 @@ function h_public_room_type(array $row): array {
     $season = in_array($slug, ['executive-suite', 'hayata-suite'], true)
         ? [['from' => '2027-06-01', 'to' => '2027-08-31', 'multiplier' => 1.12, 'label' => 'Summer']]
         : [['from' => '2026-12-15', 'to' => '2027-01-05', 'multiplier' => 1.25, 'label' => 'Festive season']];
+
+    // The pictures a manager uploaded for this room type come first; the
+    // bundled photographs are only used when the type has none.
+    $profile = trim((string) ($row['image'] ?? ''));
+    $gallery = $row['gallery'] ?? [];
+    if (!is_array($gallery)) $gallery = json_decode((string) $gallery, true) ?: [];
+    $uploaded = array_values(array_filter(array_map('strval', $gallery)));
+    if ($profile !== '') $uploaded = array_values(array_unique(array_merge([$profile], $uploaded)));
+    $fallback = [
+        'https://images.unsplash.com/photo-1611892440504-42a792e24d32?auto=format&fit=crop&w=1400&q=85',
+        'https://images.unsplash.com/photo-1590490360182-c33d57733427?auto=format&fit=crop&w=1400&q=85',
+    ];
+
     return [
         'slug' => $slug, 'staffType' => $row['name'], 'name' => $row['name'] . (in_array($slug, ['executive-suite', 'hayata-suite'], true) ? ' Apartment' : ''),
         'category' => in_array($slug, ['executive-suite', 'hayata-suite'], true) ? 'Apartment' : 'Room',
         'tagline' => 'A considered ' . ($slug === 'hayata-suite' ? 'residence' : 'space') . ' at Hayata.',
         'description' => 'Comfort, quiet and thoughtful details.',
         'longDescription' => 'Designed around natural light, deep sleep and a calm city stay.',
-        'images' => [
-            'https://images.unsplash.com/photo-1611892440504-42a792e24d32?auto=format&fit=crop&w=1400&q=85',
-            'https://images.unsplash.com/photo-1590490360182-c33d57733427?auto=format&fit=crop&w=1400&q=85',
-        ],
+        'image' => $profile !== '' ? $profile : $fallback[0],
+        'images' => $uploaded ?: $fallback,
         'amenities' => is_array($row['amenities']) ? $row['amenities'] : (json_decode($row['amenities'], true) ?: []),
         'highlights' => ['City view', 'Daily housekeeping'],
         'sleeps' => (int) $row['capacity'],
@@ -803,13 +865,31 @@ function h_room_stay(PDO $pdo, string $roomNumber): array {
     $roomStatement->execute(['room' => $roomNumber]);
     $room = $roomStatement->fetch();
 
-    if (!$stay && !$room) h_error('This in-room dining code does not match a room at Hayata Hotel.', 'ROOM_UNAVAILABLE', 403);
     if ($stay) return $stay;
+    if ($room) {
+        return [
+            'id' => '',
+            'guest_name' => (string) ($room['guest_name'] ?? ''),
+            'room_number' => (string) ($room['number'] ?? $roomNumber),
+            'check_in' => null,
+            'check_out' => null,
+            'status' => null,
+            'email' => '',
+        ];
+    }
 
+    // The code identifies the room, so a room the database does not know yet
+    // still opens its menu and receives its orders. This is only allowed while
+    // the database has no rooms at all, which means the room list still lives
+    // in the staff application. Once the database knows its rooms, a code that
+    // matches none of them is refused, so a deleted room stays deleted.
+    static $roomCount = null;
+    if ($roomCount === null) $roomCount = (int) $pdo->query('SELECT COUNT(*) FROM rooms')->fetchColumn();
+    if ($roomCount > 0 || !preg_match('/^\d{2,4}$/', $roomNumber)) h_error('This in-room dining code does not match a room at Hayata Hotel.', 'ROOM_UNAVAILABLE', 403);
     return [
         'id' => '',
-        'guest_name' => (string) ($room['guest_name'] ?? ''),
-        'room_number' => (string) ($room['number'] ?? $roomNumber),
+        'guest_name' => '',
+        'room_number' => $roomNumber,
         'check_in' => null,
         'check_out' => null,
         'status' => null,
@@ -1335,6 +1415,8 @@ if (preg_match('#^/resource/([a-z-]+)(?:/([^/]+))?$#', $route, $matches)) {
         $rows = h_decode_rows($pdo->query("SELECT * FROM `$table` ORDER BY " . h_list_order($table) . " LIMIT $limit")->fetchAll());
         if ($table === 'orders') $rows = h_attach_order_items($pdo, $rows);
         if ($table === 'menu_items') $rows = h_normalize_menu_items($rows);
+        if ($table === 'room_types') $rows = array_map('h_normalize_room_type', $rows);
+        if ($table === 'rooms') $rows = array_map('h_normalize_room', $rows);
         // The staff directory only exposes the columns the screen needs, and
         // never the password hash.
         if ($table === 'users') $rows = array_map('h_public_user', $rows);
@@ -1348,6 +1430,8 @@ if (preg_match('#^/resource/([a-z-]+)(?:/([^/]+))?$#', $route, $matches)) {
         $decoded = h_decode_row($row);
         if ($table === 'orders') $decoded = h_attach_order_items($pdo, [$decoded])[0];
         if ($table === 'menu_items') $decoded = h_normalize_menu_item($decoded);
+        if ($table === 'room_types') $decoded = h_normalize_room_type($decoded);
+        if ($table === 'rooms') $decoded = h_normalize_room($decoded);
         // A member of staff may read their own record; reading anyone else's
         // record needs the staff permission.
         if ($table === 'users') {
@@ -1372,6 +1456,12 @@ if (preg_match('#^/resource/([a-z-]+)(?:/([^/]+))?$#', $route, $matches)) {
             $caller = hayata_require_permission($pdo, $resourcePermissions[$table]);
         } else {
             $caller = hayata_require_permission($pdo, 'settings.manage');
+        }
+        if ($table === 'rooms') {
+            $number = trim((string) ($body['number'] ?? ''));
+            if ($number === '') h_error('A room number is required.', 'VALIDATION', 422);
+            if (h_room_number_taken($pdo, $number)) h_error('Room ' . $number . ' already exists.', 'CONFLICT', 409);
+            $body['number'] = $number;
         }
         if ($table === 'users') {
             $email = trim((string) ($body['email'] ?? ''));
@@ -1401,6 +1491,8 @@ if (preg_match('#^/resource/([a-z-]+)(?:/([^/]+))?$#', $route, $matches)) {
         $statement->execute(['id' => $newId]);
         $created = h_decode_row($statement->fetch() ?: $body);
         if ($table === 'menu_items') $created = h_normalize_menu_item($created);
+        if ($table === 'room_types') $created = h_normalize_room_type($created);
+        if ($table === 'rooms') $created = h_normalize_room($created);
         if ($table === 'users') $created = h_public_user($created);
         // A ticket without its lines is useless in the kitchen, so the created
         // order is returned with the items that were written with it.
@@ -1417,6 +1509,12 @@ if (preg_match('#^/resource/([a-z-]+)(?:/([^/]+))?$#', $route, $matches)) {
             $caller = hayata_require_permission($pdo, $resourcePermissions[$table]);
         } else {
             $caller = hayata_require_permission($pdo, 'settings.manage');
+        }
+        if ($table === 'rooms' && array_key_exists('number', $body)) {
+            $number = trim((string) $body['number']);
+            if ($number === '') h_error('A room number is required.', 'VALIDATION', 422);
+            if (h_room_number_taken($pdo, $number, $id)) h_error('Room ' . $number . ' already exists.', 'CONFLICT', 409);
+            $body['number'] = $number;
         }
         if ($table === 'users') {
             // A member of staff may only edit their own account, and never their role.
@@ -1460,6 +1558,8 @@ if (preg_match('#^/resource/([a-z-]+)(?:/([^/]+))?$#', $route, $matches)) {
         $statement->execute(['id' => $id]);
         $updated = h_decode_row($statement->fetch() ?: $body);
         if ($table === 'menu_items') $updated = h_normalize_menu_item($updated);
+        if ($table === 'room_types') $updated = h_normalize_room_type($updated);
+        if ($table === 'rooms') $updated = h_normalize_room($updated);
         if ($table === 'users') $updated = h_public_user($updated);
         h_audit($pdo, $caller, 'Updated', ucfirst(str_replace('_', ' ', $table)), $id, 'Changed: ' . h_changed_fields($changed));
         hayata_json($updated);
@@ -1472,6 +1572,19 @@ if (preg_match('#^/resource/([a-z-]+)(?:/([^/]+))?$#', $route, $matches)) {
         }
         if ($table === 'users' && $id === $caller['id']) {
             h_error('You cannot delete your own account.', 'VALIDATION', 422);
+        }
+        if ($table === 'rooms') {
+            // A room that still has a guest in it cannot disappear: the kitchen
+            // would lose the address the order has to be delivered to.
+            $statement = $pdo->prepare('SELECT number FROM rooms WHERE id = :id LIMIT 1');
+            $statement->execute(['id' => $id]);
+            $roomNumber = $statement->fetchColumn();
+            if ($roomNumber === false) h_error('Not found.', 'NOT_FOUND', 404);
+            $occupied = $pdo->prepare("SELECT COUNT(*) FROM reservations WHERE room_number = :room AND status IN ('Checked in', 'Confirmed')");
+            $occupied->execute(['room' => (string) $roomNumber]);
+            if ((int) $occupied->fetchColumn() > 0) {
+                h_error('Room ' . $roomNumber . ' still has a booking or a guest in it. Check the guest out first.', 'CONFLICT', 409);
+            }
         }
         // The lines of an order are tied to it by a foreign key, so they have
         // to go first. Otherwise deleting a ticket fails on the constraint and

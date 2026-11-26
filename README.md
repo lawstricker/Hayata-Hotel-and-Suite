@@ -114,12 +114,37 @@ VITE_API_BASE_URL=http://localhost/hayata-api/api.php
 VITE_USE_SERVER=true
 ```
 
+### cPanel deployment
+
+The SPA and the PHP API are deployed separately. The printer bridge is not available on cPanel, so the kitchen prints from the browser.
+
+1. Build the frontend with the live API address:
+
+   ```powershell
+   $env:VITE_API_BASE_URL = "https://your-domain.com/hayata-api/api.php"
+   $env:VITE_USE_SERVER = "true"
+   npm run build
+   ```
+
+2. Upload the contents of `dist/` into `public_html/` (the files inside `dist/`, not the folder itself). Remove the old `index.html` first so the old bundle is not left behind.
+3. Upload `server/php/` into `public_html/hayata-api/`, and add a `config.local.php` with the cPanel MySQL details (`HAYATA_DB_HOST`, `HAYATA_DB_NAME`, `HAYATA_DB_USER`, `HAYATA_DB_PASS`) and the same `HAYATA_APP_SECRET` the frontend was built with. `config.local.php` holds secrets and is never committed.
+4. Apply the pending migrations against the live database, so the new room columns and the room seed are in place:
+
+   ```powershell
+   & "C:\xampp\php\php.exe" "server\php\migrate.php"
+   ```
+
+   `migrate.php` only runs the files that have not been applied yet, so it is safe to run at any time. `setup.php` recreates the whole schema and drops the data, so it is not used on a live database.
+5. Confirm the API answers: open `https://your-domain.com/hayata-api/api.php?route=/health` in the browser. It returns `{"ok":true,...}` when the database connection works.
+6. Sign in at `https://your-domain.com/`, open **Hotel operations → Rooms & room types**, and check that the room list and the room types are loaded from the server rather than from the bundled data.
+
 The API provides:
 
 - `POST /auth/login`, `GET /auth/me`, `GET /bootstrap`
 - Public room types, availability, quote, booking create/pay/lookup/cancel, enquiries and newsletter
 - `GET /public/menu` for the guest-facing menu, `GET /public/room-orders/stay` for the stay behind a room code, `POST /public/room-orders/quote` and `POST /public/room-orders` for paid in-room dining orders
 - Generic CRUD for all seeded domain tables
+- `GET/POST/PUT/DELETE /resource/rooms` for the room rack and `GET/POST/PUT/DELETE /resource/room-types` for the room types
 - Reservation, order and inventory status transitions
 - Bearer-token authentication with role and permission checks
 
@@ -136,6 +161,17 @@ All demo users are seeded into MySQL with the password `demo123`. Public booking
 - Availability is toggled straight from the table.
 - Writes need the `restaurant.menu` permission, so restaurant managers and administrators can edit the menu while other roles only read it.
 - The POS screens and the in-room QR menu read the same records, so a new dish or a deleted dish appears everywhere at once.
+
+### Rooms & room types
+
+`Hotel operations → Rooms & room types` manages the live `rooms` and `room_types` tables.
+
+- The **Rooms** tab lists the room rack with a working **Edit** and **Delete** action on every row, and an **Add room** button.
+- **Add room / Edit room** captures the room number, floor, room type, status, housekeeping status and nightly rate. The room number is the permanent identity of the room: it is the code in the in-room dining QR and the address the kitchen delivers to. A number that is already taken is refused, renaming a room changes its code, and deleting a room stops its code.
+- **Delete** asks for confirmation. A room that still has a guest or a booking in it is not deleted, because the kitchen would lose the address the order has to be delivered to.
+- The **Room types** tab shows every type with its profile picture and gallery. **Add room type / Edit room type** captures the name, code, nightly rate, occupancy, number of rooms and amenities, plus a **profile picture** and up to eight **gallery pictures**. A picture is either a pasted link or an uploaded file, which is resized in the browser and stored as a data URL. There is a live preview.
+- The room types are read by the Front Desk availability grid and by the Reservations room type picker, so a new type is available everywhere at once.
+- Writes need the `settings.manage` permission. When the API is unreachable the screen keeps working on the bundled data and says so.
 
 ### Payment gateway and activity logs
 
@@ -230,6 +266,7 @@ src/
 - [x] One permanent QR menu code per room, reusable by every guest
 - [x] Guest-facing kitchen ordering with cart, instructions, ETA, and payment before the kitchen accepts the ticket
 - [x] Printable room QR cards and guest menu link sharing
+- [x] Rooms & room types screen stored on the server: room types can be added and edited with a profile picture and a gallery, and every room has working Edit and Delete actions
 - [x] Automatic kitchen thermal printing through a configurable IP print bridge
 - [x] Failed-print queue with automatic and manual retry
 
@@ -274,10 +311,13 @@ The event bus in `src/mock/eventBus.ts` emits `stock.level.changed`, `low_stock.
 - Payment settings/transactions use `hayata-hms-payment`; activity history uses `hayata-hms-activity`.
 - Edited RBAC permissions are stored under `hayata-hms-rbac`; clearing that key restores the default role matrix.
 - In-room QR codes resolve to `/room/:roomNumber/menu` and identify only the room. The printed code is permanent: it does not change at checkout, it keeps working after a guest has checked out and for every guest who stays in that room next, and it is only replaced when a new code is created for the room or the room URL is modified.
-- The guest menu resolves its stay from `GET /public/room-orders/stay`, because a guest who scans the code is not signed in. The code identifies the room, so the server answers with the guest who is checked in, or with the last guest who stayed in that room when the stay is closed, and a room with no reservation yet still opens its own menu. The server is authoritative: when it answers, its answer decides whether the menu is open, so a guest never sees a menu the kitchen would refuse. Only when the API cannot be reached does the in-browser mirror step in.
+- The guest menu resolves its stay from `GET /public/room-orders/stay`, because a guest who scans the code is not signed in. The code identifies the room, so the server answers with the guest who is checked in, or with the last guest who stayed in that room when the stay is closed, and a room with no reservation yet still opens its own menu. The server is authoritative: when it answers, its answer decides whether the menu is open, so a guest never sees a menu the kitchen would refuse. When the API cannot be reached, or the server does not know the room yet (403/404), the in-browser mirror steps in so a printed card keeps working while the room is added to the database.
+- The `rooms` table is the list of rooms the server knows. A code that matches no room is refused once the table is not empty, so a room that a manager deleted no longer opens a menu. Migration `005_seed_rooms` backfills the 40 rooms and the 5 room types when the table was never seeded.
 - Guest QR orders are paid before they reach the kitchen. The basket is priced by the server (`POST /public/room-orders/quote`), the guest pays through the gateway, and `POST /public/room-orders` creates the order, its lines and the payment record in one transaction. The server rejects an order that has no payment reference or an amount below the order total, so an unpaid basket never becomes a kitchen ticket. If the server refuses an order after the payment was approved, the payment is reversed.
 - Guest QR orders are mirrored to browser storage so kitchen displays in other tabs of the same browser receive them. Orders placed from a guest's own phone are stored by the PHP API in `orders`, `order_items` and `payments`.
 - The restaurant menu is stored in the `menu_items` table. Uploaded item photos are kept as data URLs, so `menu_items.image` is a `MEDIUMTEXT` column (widened by migration `002_menu_item_image_mediumtext`).
+- Room types live in the `room_types` table and are written through `/resource/room-types`. A room type carries a profile picture (`image`) and a gallery (`gallery`, a JSON array of pictures); both are `MEDIUMTEXT` columns added by migration `006_room_type_images`. Uploaded pictures are stored as data URLs and are downscaled in the browser before they are sent.
+- Rooms live in the `rooms` table and are written through `/resource/rooms`. The room number is the permanent identity of a room: it is the code in the in-room dining QR and the address the kitchen delivers to, so a number is never shared by two rooms, renaming a room changes its code, and deleting a room stops its code.
 - Database schema changes are applied with `server/php/migrate.php`, which runs the files in `server/php/migrations/` and records them in `schema_migrations`. Use it instead of `setup.php` on a live database so no data is lost.
 - Online bookings are mirrored under `hayata-hms-live-reservations` so they survive refreshes and appear in staff Reservations and Front Desk.
 - No real payment, email, barcode scanner, or backend service is contacted.

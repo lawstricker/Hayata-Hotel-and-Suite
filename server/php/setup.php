@@ -66,7 +66,9 @@ CREATE TABLE room_types (
   base_rate DECIMAL(12,2) NOT NULL,
   capacity INT NOT NULL,
   total_rooms INT NOT NULL,
-  amenities TEXT
+  amenities TEXT,
+  image MEDIUMTEXT NULL,
+  gallery MEDIUMTEXT NULL
 ) ENGINE=InnoDB;
 CREATE TABLE rooms (
   id VARCHAR(40) PRIMARY KEY,

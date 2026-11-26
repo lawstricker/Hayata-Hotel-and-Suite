@@ -129,8 +129,9 @@ export function findRoomStay(rooms: Room[], reservations: Reservation[], roomNum
  * Resolves the stay behind a room's permanent QR code.
  *
  * The server is authoritative: when it answers, its answer decides whether the
- * menu is open, so a guest never sees a menu the kitchen would refuse. Only
- * when the API cannot be reached does the in-browser mirror step in.
+ * menu is open, so a guest never sees a menu the kitchen would refuse. When
+ * the server does not know the room yet, the in-browser mirror takes over, so
+ * the printed card keeps working while the room is added to the database.
  */
 export async function fetchActiveRoomStay(roomNumber: string): Promise<ActiveRoomStay | null> {
   if (SERVER_ENABLED) {
@@ -141,8 +142,9 @@ export async function fetchActiveRoomStay(roomNumber: string): Promise<ActiveRoo
     } catch (error) {
       const status = (error as { status?: number }).status
       // The server answered: it knows whether the room exists.
-      if (typeof status === 'number' && status < 500) return null
-      // The API is unreachable, so the in-browser mirror takes over below.
+      if (typeof status === 'number' && status < 500 && status !== 403 && status !== 404) return null
+      // The API is unreachable, or the room is not in the database yet, so the
+      // in-browser mirror takes over below.
     }
   }
   const { rooms, reservations } = useHotelStore.getState()

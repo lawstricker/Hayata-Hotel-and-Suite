@@ -1,7 +1,7 @@
 import { zodResolver } from '@hookform/resolvers/zod'
 import { addDays, endOfWeek, format, startOfWeek } from 'date-fns'
 import { CalendarDays, ChevronLeft, ChevronRight, DoorOpen, List, LogIn, Plus, Search, Users, XCircle } from 'lucide-react'
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { toast } from 'sonner'
 import { z } from 'zod'
@@ -14,8 +14,9 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { DataTable, type DataTableColumn } from '@/components/common/data-table'
 import { PageHeader } from '@/components/common/page-header'
 import { StatusPill } from '@/components/common/status-pill'
-import { guests, roomTypes } from '@/mock/data'
+import { guests } from '@/mock/data'
 import { useHotelStore } from '@/store/hotelStore'
+import { useRoomTypesStore } from '@/store/roomTypesStore'
 import { cn, formatCurrency } from '@/lib/utils'
 import type { Reservation } from '@/types/domain'
 
@@ -34,6 +35,7 @@ type ReservationValues = z.infer<typeof reservationSchema>
 
 function CreateReservationDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
   const addReservation = useHotelStore((state) => state.addReservation)
+  const roomTypes = useRoomTypesStore((state) => state.items)
   const form = useForm<ReservationValues>({
     resolver: zodResolver(reservationSchema),
     defaultValues: { checkIn: new Date().toISOString().slice(0, 10), checkOut: new Date(Date.now() + 2 * 86400000).toISOString().slice(0, 10), adults: 1, children: 0, source: 'Direct', ratePlan: 'Flexible', deposit: 100 },
@@ -106,6 +108,8 @@ function CheckInDialog({ reservation, onOpenChange }: { reservation: Reservation
 export function ReservationsPage() {
   const reservations = useHotelStore((state) => state.reservations)
   const updateStatus = useHotelStore((state) => state.updateReservationStatus)
+  const roomTypes = useRoomTypesStore((state) => state.items)
+  const loadRoomTypes = useRoomTypesStore((state) => state.load)
   const [createOpen, setCreateOpen] = useState(false)
   const [checkInReservation, setCheckInReservation] = useState<Reservation | null>(null)
   const [statusFilter, setStatusFilter] = useState('all')
@@ -113,6 +117,9 @@ export function ReservationsPage() {
   const weekStart = startOfWeek(addDays(new Date(), weekOffset * 7), { weekStartsOn: 1 })
   const weekDays = Array.from({ length: 7 }, (_, index) => addDays(weekStart, index))
   const filtered = useMemo(() => reservations.filter((reservation) => statusFilter === 'all' || reservation.status === statusFilter), [reservations, statusFilter])
+
+  // The room types come from the database, so the list is loaded from the API.
+  useEffect(() => { void loadRoomTypes() }, [loadRoomTypes])
 
   const columns: DataTableColumn<Reservation>[] = [
     { key: 'guestName', header: 'Guest', sortable: true, cell: (row) => <div><p className="font-bold">{row.guestName}</p><p className="text-[10px] font-mono text-muted-foreground">{row.id.toUpperCase()}</p></div> },

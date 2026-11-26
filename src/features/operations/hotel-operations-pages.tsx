@@ -1,7 +1,7 @@
 import { zodResolver } from '@hookform/resolvers/zod'
 import { addDays, format } from 'date-fns'
-import { BedDouble, Brush, CalendarCheck2, Check, CircleDot, DoorOpen, GripVertical, LogIn, Plus, Sparkles, Wrench } from 'lucide-react'
-import { useState } from 'react'
+import { BedDouble, Brush, CalendarCheck2, Check, CircleDot, DoorOpen, GripVertical, ImageOff, LogIn, Pencil, Plus, Sparkles, Trash2, Wrench } from 'lucide-react'
+import { useEffect, useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
@@ -12,14 +12,18 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Input, Label, Textarea } from '@/components/ui/input'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { ConfirmDialog } from '@/components/common/confirm-dialog'
 import { DataTable, type DataTableColumn } from '@/components/common/data-table'
 import { KpiCard } from '@/components/common/kpi-card'
 import { PageHeader } from '@/components/common/page-header'
 import { StatusPill } from '@/components/common/status-pill'
-import { housekeepingTasks as seedTasks, maintenanceTickets as seedTickets, roomTypes } from '@/mock/data'
+import { RoomDialog } from '@/features/operations/room-dialog'
+import { RoomTypeDialog } from '@/features/operations/room-type-dialog'
+import { housekeepingTasks as seedTasks, maintenanceTickets as seedTickets } from '@/mock/data'
 import { useHotelStore } from '@/store/hotelStore'
+import { useRoomTypesStore } from '@/store/roomTypesStore'
 import { cn, downloadCsv, formatCurrency } from '@/lib/utils'
-import type { MaintenanceTicket, Room, TaskStatus } from '@/types/domain'
+import type { MaintenanceTicket, Room, RoomType, TaskStatus } from '@/types/domain'
 
 const roomStatusStyles: Record<Room['status'], string> = {
   Available: 'border-emerald-200 bg-emerald-50/70 text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-200',
@@ -34,7 +38,13 @@ export function FrontDeskPage() {
   const navigate = useNavigate()
   const rooms = useHotelStore((state) => state.rooms)
   const reservations = useHotelStore((state) => state.reservations)
+  const roomTypes = useRoomTypesStore((state) => state.items)
+  const loadRoomTypes = useRoomTypesStore((state) => state.load)
   const updateStatus = useHotelStore((state) => state.updateReservationStatus)
+
+  // The room types come from the database, so the list is loaded from the API.
+  useEffect(() => { void loadRoomTypes() }, [loadRoomTypes])
+
   const arrivals = reservations.filter((reservation) => reservation.status === 'Confirmed' || reservation.status === 'Pending').slice(0, 8)
   const departures = reservations.filter((reservation) => reservation.status === 'Checked in').slice(0, 8)
   const available = rooms.filter((room) => room.status === 'Available' || room.status === 'Clean').length
@@ -54,6 +64,53 @@ export function FrontDeskPage() {
 
 export function RoomsPage() {
   const rooms = useHotelStore((state) => state.rooms)
+  const removeRoom = useHotelStore((state) => state.removeRoom)
+  const roomTypes = useRoomTypesStore((state) => state.items)
+  const roomTypesSource = useRoomTypesStore((state) => state.source)
+  const loadRoomTypes = useRoomTypesStore((state) => state.load)
+  const [roomTypeDialogOpen, setRoomTypeDialogOpen] = useState(false)
+  const [editingType, setEditingType] = useState<RoomType | null>(null)
+  const [roomTypeDialogKey, setRoomTypeDialogKey] = useState(0)
+  const [roomDialogOpen, setRoomDialogOpen] = useState(false)
+  const [editingRoom, setEditingRoom] = useState<Room | null>(null)
+  const [roomDialogKey, setRoomDialogKey] = useState(0)
+  const [deletingRoom, setDeletingRoom] = useState<Room | null>(null)
+
+  // The room types live in the database, so the list is loaded from the API.
+  useEffect(() => { void loadRoomTypes() }, [loadRoomTypes])
+
+  function openCreateType() {
+    setEditingType(null)
+    setRoomTypeDialogKey((key) => key + 1)
+    setRoomTypeDialogOpen(true)
+  }
+  function openEditType(roomType: RoomType) {
+    setEditingType(roomType)
+    setRoomTypeDialogKey((key) => key + 1)
+    setRoomTypeDialogOpen(true)
+  }
+  function openCreateRoom() {
+    setEditingRoom(null)
+    setRoomDialogKey((key) => key + 1)
+    setRoomDialogOpen(true)
+  }
+  function openEditRoom(room: Room) {
+    setEditingRoom(room)
+    setRoomDialogKey((key) => key + 1)
+    setRoomDialogOpen(true)
+  }
+
+  async function confirmDeleteRoom() {
+    if (!deletingRoom) return
+    const room = deletingRoom
+    const removed = await removeRoom(room.id)
+    if (removed) {
+      toast.success(`Room ${room.number} deleted`, { description: 'Its in-room dining QR code no longer opens a menu.' })
+    } else {
+      toast.error('Room could not be deleted', { description: 'The room still has a guest or a booking in it, or the server could not be reached.' })
+    }
+  }
+
   const columns: DataTableColumn<Room>[] = [
     { key: 'number', header: 'Room', sortable: true, cell: (row) => <div><p className="font-display font-extrabold">{row.number}</p><p className="text-[10px] text-muted-foreground">Floor {row.floor}</p></div> },
     { key: 'type', header: 'Room type', cell: (row) => <span className="text-xs font-semibold">{row.type}</span> },
@@ -61,8 +118,113 @@ export function RoomsPage() {
     { key: 'housekeepingStatus', header: 'Housekeeping', cell: (row) => <StatusPill status={row.housekeepingStatus} /> },
     { key: 'guestName', header: 'Guest', cell: (row) => <span className="text-xs text-muted-foreground">{row.guestName ?? '—'}</span> },
     { key: 'rate', header: 'Rate', align: 'right', cell: (row) => <span className="text-xs font-bold">{formatCurrency(row.rate)}</span> },
+    {
+      key: 'actions',
+      header: 'Actions',
+      align: 'right',
+      exportValue: () => '',
+      cell: (row) => (
+        <div className="flex justify-end gap-1.5">
+          <Button size="sm" variant="outline" onClick={() => openEditRoom(row)}><Pencil /> Edit</Button>
+          <Button size="sm" variant="ghost" className="text-destructive hover:bg-destructive/10 hover:text-destructive" onClick={() => setDeletingRoom(row)}><Trash2 /> Delete</Button>
+        </div>
+      ),
+    },
   ]
-  return <div className="space-y-6"><PageHeader title="Rooms & room types" description="Manage physical rooms, categories, rates and amenities." breadcrumbs={[{ label: 'Hotel operations' }, { label: 'Rooms' }]} actions={<Button onClick={() => toast.info('New room type', { description: 'Configure occupancy, base rate and amenities.' })}><Plus /> Add room type</Button>} /><Tabs defaultValue="rooms"><TabsList><TabsTrigger value="rooms">Rooms</TabsTrigger><TabsTrigger value="types">Room types</TabsTrigger></TabsList><TabsContent value="rooms"><Card><CardContent className="pt-5"><DataTable data={rooms} columns={columns} searchPlaceholder="Search room, type or guest…" searchKeys={[(row) => row.number, (row) => row.type, (row) => row.guestName ?? '']} pageSize={10} filename="rooms.csv" /></CardContent></Card></TabsContent><TabsContent value="types"><div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">{roomTypes.map((type) => <Card key={type.id}><CardHeader className="flex-row items-start justify-between"><div><CardTitle>{type.name}</CardTitle><CardDescription>{type.code} · {type.capacity} guests</CardDescription></div><Badge variant="success">{type.totalRooms} rooms</Badge></CardHeader><CardContent><p className="font-display text-2xl font-extrabold">{formatCurrency(type.baseRate)}<span className="text-xs font-medium text-muted-foreground"> / night</span></p><div className="mt-4 flex flex-wrap gap-1.5">{type.amenities.map((amenity) => <Badge key={amenity} variant="outline">{amenity}</Badge>)}</div><Button variant="outline" size="sm" className="mt-5 w-full" onClick={() => toast.info(`${type.name} editor opened`)}>Edit room type</Button></CardContent></Card>)}</div></TabsContent></Tabs></div>
+
+  return (
+    <div className="space-y-6">
+      <PageHeader
+        title="Rooms & room types"
+        description="Manage physical rooms, categories, rates and amenities."
+        breadcrumbs={[{ label: 'Hotel operations' }, { label: 'Rooms' }]}
+        actions={
+          <>
+            <Button variant="outline" onClick={openCreateRoom}><Plus /> Add room</Button>
+            <Button onClick={openCreateType}><Plus /> Add room type</Button>
+          </>
+        }
+      />
+      <Tabs defaultValue="rooms">
+        <TabsList>
+          <TabsTrigger value="rooms">Rooms</TabsTrigger>
+          <TabsTrigger value="types">Room types</TabsTrigger>
+        </TabsList>
+        <TabsContent value="rooms">
+          <Card>
+            <CardContent className="pt-5">
+              <DataTable
+                data={rooms}
+                columns={columns}
+                searchPlaceholder="Search room, type or guest…"
+                searchKeys={[(row) => row.number, (row) => row.type, (row) => row.guestName ?? '']}
+                pageSize={10}
+                filename="rooms.csv"
+              />
+            </CardContent>
+          </Card>
+        </TabsContent>
+        <TabsContent value="types">
+          <div className="space-y-4">
+            {roomTypesSource === 'local' && (
+              <p className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-xs text-amber-800 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
+                These room types are the bundled ones. The server could not be reached, so a new room type is only saved on this device.
+              </p>
+            )}
+            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+              {roomTypes.map((type) => {
+                const gallery = type.gallery ?? []
+                const cover = type.image || gallery[0]
+                return (
+                  <Card key={type.id} className="overflow-hidden">
+                    {cover ? (
+                      <div className="relative aspect-[16/9] w-full overflow-hidden bg-muted">
+                        <img src={cover} alt={type.name} className="size-full object-cover" />
+                        {gallery.length > 1 && (
+                          <div className="absolute bottom-2 right-2 flex gap-1">
+                            {gallery.slice(1, 4).map((picture, index) => (
+                              <img key={`${picture.slice(0, 40)}-${index}`} src={picture} alt="" className="size-9 rounded-md border border-white/70 object-cover shadow-sm" />
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    ) : (
+                      <div className="flex aspect-[16/9] w-full items-center justify-center bg-muted/40">
+                        <ImageOff className="size-6 text-muted-foreground" aria-hidden="true" />
+                      </div>
+                    )}
+                    <CardHeader className="flex-row items-start justify-between space-y-0">
+                      <div>
+                        <CardTitle>{type.name}</CardTitle>
+                        <CardDescription>{type.code} · {type.capacity} guests</CardDescription>
+                      </div>
+                      <Badge variant="success">{type.totalRooms} rooms</Badge>
+                    </CardHeader>
+                    <CardContent>
+                      <p className="font-display text-2xl font-extrabold">{formatCurrency(type.baseRate)}<span className="text-xs font-medium text-muted-foreground"> / night</span></p>
+                      <div className="mt-4 flex flex-wrap gap-1.5">{type.amenities.map((amenity) => <Badge key={amenity} variant="outline">{amenity}</Badge>)}</div>
+                      <Button variant="outline" size="sm" className="mt-5 w-full" onClick={() => openEditType(type)}><Pencil /> Edit room type</Button>
+                    </CardContent>
+                  </Card>
+                )
+              })}
+            </div>
+          </div>
+        </TabsContent>
+      </Tabs>
+      <RoomTypeDialog key={roomTypeDialogKey} open={roomTypeDialogOpen} onOpenChange={setRoomTypeDialogOpen} roomType={editingType} />
+      <RoomDialog key={roomDialogKey} open={roomDialogOpen} onOpenChange={setRoomDialogOpen} room={editingRoom} />
+      <ConfirmDialog
+        open={Boolean(deletingRoom)}
+        onOpenChange={(open) => { if (!open) setDeletingRoom(null) }}
+        title={deletingRoom ? `Delete room ${deletingRoom.number}?` : 'Delete room?'}
+        description="The room leaves the rack and its in-room dining QR code stops working. The past orders of the room are kept."
+        confirmLabel="Delete room"
+        destructive
+        onConfirm={confirmDeleteRoom}
+      />
+    </div>
+  )
 }
 
 const taskColumns: TaskStatus[] = ['Dirty', 'In Progress', 'Inspected', 'Clean']

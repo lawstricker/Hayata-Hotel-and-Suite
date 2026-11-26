@@ -54,9 +54,17 @@ describe('Server stay resolution', () => {
     expect(stay?.reservation.guestName).toBe('Ada Okafor')
   })
 
-  it('closes the menu when the code does not match a room', async () => {
+  it('keeps the menu open when the server does not know the room yet', async () => {
+    // The database can be behind the staff application: the in-browser mirror
+    // then keeps the printed card working.
     apiGet.mockRejectedValue(Object.assign(new Error('This in-room dining code does not match a room at Hayata Hotel.'), { status: 403, code: 'ROOM_UNAVAILABLE' }))
     const stay = await fetchActiveRoomStay('410')
+    expect(stay?.room.number).toBe('410')
+  })
+
+  it('closes the menu when neither the server nor the mirror know the room', async () => {
+    apiGet.mockRejectedValue(Object.assign(new Error('This in-room dining code does not match a room at Hayata Hotel.'), { status: 403, code: 'ROOM_UNAVAILABLE' }))
+    const stay = await fetchActiveRoomStay('999')
     expect(stay).toBeNull()
   })
 

@@ -3,6 +3,7 @@ import { eventBus } from '@/mock/eventBus'
 import { readLiveOrders, subscribeToLiveOrders, updateLiveOrderStatus, upsertLiveOrder } from '@/lib/order-sync'
 import { readLiveReservations, subscribeToLiveReservations, updateLiveReservationStatus, upsertLiveReservation } from '@/lib/reservation-sync'
 import { syncOrderCreate, syncOrderStatus, syncReservationCreate, syncReservationStatus, syncStockAdjust } from '@/lib/server-sync'
+import { createRoom, deleteRoom, updateRoom as updateRoomOnServer } from '@/lib/rooms-api'
 import { logActivity } from '@/lib/activity-log'
 import {
   inventoryItems as seedInventory,
@@ -47,6 +48,19 @@ interface HotelState {
   addPurchaseOrder: (purchaseOrder: PurchaseOrder) => void
   updatePurchaseOrderStatus: (purchaseOrderId: string, status: PurchaseOrder['status']) => void
   addInventoryItem: (item: InventoryItem) => void
+  /** Adds a room to the rack and stores it on the server. */
+  addRoom: (room: Room) => Promise<RoomWriteResult>
+  /** Saves the changes made to a room. */
+  editRoom: (room: Room) => Promise<RoomWriteResult>
+  /** Removes a room from the rack, which also stops its QR code. */
+  removeRoom: (id: string) => Promise<boolean>
+}
+
+/** The outcome of a room write. */
+export interface RoomWriteResult {
+  room: Room
+  /** `false` when the API could not be reached and the change is only stored locally. */
+  persisted: boolean
 }
 
 export const useHotelStore = create<HotelState>((set, get) => ({
@@ -196,6 +210,45 @@ export const useHotelStore = create<HotelState>((set, get) => ({
   addInventoryItem: (item) => {
     logActivity({ action: 'Inventory item created', module: 'Inventory', detail: `${item.name} · ${item.sku}` })
     set((state) => ({ inventory: [item, ...state.inventory] }))
+  },
+  addRoom: async (room) => {
+    try {
+      const saved = await createRoom(room)
+      set((state) => ({ rooms: [...state.rooms.filter((candidate) => candidate.id !== saved.id), saved] }))
+      logActivity({ action: 'Room added', module: 'Rooms', detail: `Room ${saved.number} · ${saved.type}` })
+      return { room: saved, persisted: true }
+    } catch {
+      // The API is unreachable: the room stays on this device so the manager
+      // does not lose the room they just created.
+      set((state) => ({ rooms: [...state.rooms.filter((candidate) => candidate.id !== room.id), room] }))
+      logActivity({ action: 'Room added', module: 'Rooms', detail: `Room ${room.number} · ${room.type}` })
+      return { room, persisted: false }
+    }
+  },
+  editRoom: async (room) => {
+    try {
+      const saved = await updateRoomOnServer(room)
+      set((state) => ({ rooms: state.rooms.map((candidate) => candidate.id === saved.id ? saved : candidate) }))
+      logActivity({ action: 'Room updated', module: 'Rooms', detail: `Room ${saved.number} · ${saved.type}` })
+      return { room: saved, persisted: true }
+    } catch {
+      set((state) => ({ rooms: state.rooms.map((candidate) => candidate.id === room.id ? room : candidate) }))
+      logActivity({ action: 'Room updated', module: 'Rooms', detail: `Room ${room.number} · ${room.type}` })
+      return { room, persisted: false }
+    }
+  },
+  removeRoom: async (id) => {
+    const room = get().rooms.find((candidate) => candidate.id === id)
+    try {
+      await deleteRoom(id)
+      set((state) => ({ rooms: state.rooms.filter((candidate) => candidate.id !== id) }))
+      logActivity({ action: 'Room deleted', module: 'Rooms', detail: room ? `Room ${room.number} · ${room.type}` : id })
+      return true
+    } catch {
+      // The server refused or could not be reached, so the room stays in the
+      // rack: the kitchen may still have orders bound to its QR code.
+      return false
+    }
   },
 }))
 

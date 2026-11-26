@@ -110,6 +110,10 @@ export interface RoomType {
   capacity: number
   totalRooms: number
   amenities: string[]
+  /** The profile picture of the room type, shown on its card. */
+  image?: string
+  /** The extra pictures of the room type. */
+  gallery?: string[]
 }
 
 export interface Room {
