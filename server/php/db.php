@@ -4,7 +4,9 @@
  */
 declare(strict_types=1);
 
-require_once __DIR__ . '/config.php';
+// security.php loads config.php itself and supplies validation, RLS, session,
+// upload, redaction and response-trimming helpers used across the API.
+require_once __DIR__ . '/security.php';
 
 // PHP and MySQL must read the same clock. Without this, PHP follows the
 // server's daylight saving rules while MySQL follows the system's, and the
@@ -57,6 +59,9 @@ function hayata_client_ip(): string {
  * a different content type or render a response as a page.
  */
 function hayata_security_headers(): void {
+    // Apache/mod_php may add this before the script runs, even with the
+    // .htaccess rule installed. Removing it here makes the guarantee complete.
+    header_remove('X-Powered-By');
     header('X-Content-Type-Options: nosniff');
     header('X-Frame-Options: DENY');
     header('Referrer-Policy: strict-origin-when-cross-origin');
@@ -99,32 +104,6 @@ function hayata_json($data, int $status = 200): void {
     exit;
 }
 
-/**
- * Removes control characters and null bytes from incoming input.
- *
- * This blocks null-byte and header/log injection tricks without touching the
- * text a user actually typed.
- */
-function hayata_sanitize($value) {
-    if (is_array($value)) return array_map('hayata_sanitize', $value);
-    if (!is_string($value)) return $value;
-    $value = str_replace("\0", '', $value);
-    return preg_replace('/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/u', '', $value) ?? $value;
-}
-
-/**
- * Strips HTML from a free-text field.
- *
- * Used for the public forms (enquiries, booking notes, guest messages) so a
- * stored value can never carry a script tag into a staff screen.
- */
-function hayata_clean_text(string $value): string {
-    $value = hayata_sanitize($value);
-    $value = strip_tags($value);
-    $value = html_entity_decode($value, ENT_QUOTES | ENT_HTML5, 'UTF-8');
-    return trim($value);
-}
-
 /** Reads and sanitises the JSON request body. */
 function hayata_body(): array {
     $raw = file_get_contents('php://input');
@@ -147,24 +126,6 @@ function hayata_method(): string {
 
 function hayata_query(): array {
     return hayata_sanitize($_GET);
-}
-
-/**
- * The secret used to sign tokens and rate-limit keys.
- *
- * Outside development the configuration refuses to start without a real
- * secret, so the placeholder below can never protect a live deployment.
- */
-function hayata_app_secret(): string {
-    $secret = hayata_config()['app_secret'];
-    if ($secret !== '') return $secret;
-    if (hayata_config()['app_env'] === 'development') return 'hayata-development-only-placeholder';
-    hayata_json(['error' => 'Server configuration is incomplete.', 'code' => 'CONFIG_ERROR'], 500);
-}
-
-/** Hashes a bearer token so the database never stores a usable credential. */
-function hayata_token_hash(string $token): string {
-    return hash_hmac('sha256', $token, hayata_app_secret());
 }
 
 /**
@@ -194,10 +155,14 @@ function hayata_bearer_token(): ?string {
 function hayata_request_user(PDO $pdo): ?array {
     $token = hayata_bearer_token();
     if ($token === null) return null;
+    $hash = hayata_token_hash($token);
+    // An idle session is revoked before it can resolve a user. This also
+    // removes the single-use token row that a stale browser might still hold.
+    if (!h_session_touch($pdo, $hash)) return null;
     $statement = $pdo->prepare('SELECT u.id, u.name, u.email, u.department, u.status, u.last_active, r.name AS role, r.label AS role_label
         FROM api_tokens t JOIN users u ON u.id = t.user_id JOIN roles r ON r.id = u.role_id
         WHERE t.token = :token AND t.expires_at > NOW() AND u.status = :status');
-    $statement->execute(['token' => hayata_token_hash($token), 'status' => 'Active']);
+    $statement->execute(['token' => $hash, 'status' => 'Active']);
     $user = $statement->fetch();
     return $user ?: null;
 }
@@ -229,7 +194,7 @@ function hayata_require_permission(PDO $pdo, string $permission): array {
  * The bucket key is hashed with the application secret so the table never stores
  * raw IP addresses or e-mail addresses.
  */
-function hayata_rate_limit(PDO $pdo, string $bucket, int $max, int $window): void {
+function hayata_rate_limit(PDO $pdo, string $bucket, int $max, int $window): int {
     $key = substr(hash_hmac('sha256', $bucket, hayata_app_secret()), 0, 120);
     $statement = $pdo->prepare(
         'INSERT INTO rate_limits (bucket, hits, window_started_at) VALUES (:bucket, 1, NOW())
@@ -240,10 +205,13 @@ function hayata_rate_limit(PDO $pdo, string $bucket, int $max, int $window): voi
     $statement->execute(['bucket' => $key, 'window_a' => $window, 'window_b' => $window]);
     $check = $pdo->prepare('SELECT hits FROM rate_limits WHERE bucket = :bucket');
     $check->execute(['bucket' => $key]);
-    if ((int) $check->fetchColumn() > $max) {
+    $hits = (int) $check->fetchColumn();
+    h_rate_limit_headers($max, $max - $hits, $window);
+    if ($hits > $max) {
         header('Retry-After: ' . $window);
         hayata_json(['error' => 'Too many requests. Please wait a moment and try again.', 'code' => 'RATE_LIMITED'], 429);
     }
+    return $max - $hits;
 }
 
 /** Removes rate-limit buckets that are past their window. */

@@ -30,7 +30,7 @@ function hayata_config_bool(string $value): bool {
  *   db_host: string, db_name: string, db_user: string, db_pass: string, db_port: int,
  *   cors_origins: array<int, string>, app_env: string, debug: bool, app_secret: string,
  *   app_timezone: string,
- *   token_ttl: int, rate_limit_max: int, rate_limit_window: int, login_max_attempts: int,
+ *   token_ttl: int, session_idle_ttl: int, rate_limit_max: int, rate_limit_window: int, login_max_attempts: int,
  *   login_lockout: int, mail_transport: string, smtp_host: string, smtp_port: int,
  *   smtp_username: string, smtp_password: string, smtp_secure: string,
  *   smtp_from_email: string, smtp_from_name: string
@@ -84,6 +84,9 @@ function hayata_config(): array {
         // daylight saving rules.
         'app_timezone' => $read('HAYATA_APP_TIMEZONE', 'Africa/Lagos'),
         'token_ttl' => max(300, (int) $read('HAYATA_TOKEN_TTL', '43200')),
+        // A session that has been idle for this long is revoked, even when its
+        // absolute lifetime has not elapsed yet.
+        'session_idle_ttl' => max(60, (int) $read('HAYATA_SESSION_IDLE_TTL', '7200')),
         'rate_limit_max' => max(1, (int) $read('HAYATA_RATE_LIMIT_MAX', '120')),
         'rate_limit_window' => max(1, (int) $read('HAYATA_RATE_LIMIT_WINDOW', '60')),
         'login_max_attempts' => max(1, (int) $read('HAYATA_LOGIN_MAX_ATTEMPTS', '5')),

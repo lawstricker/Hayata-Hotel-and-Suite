@@ -15,8 +15,13 @@
     RewriteRule "^(setup|migrate|seed_access)\.php$" - [F,L]
 
     # Deny the raw library files.
-    RewriteRule "^(config|config\.local|db|mailer|access-matrix)\.php$" - [F,L]
+    RewriteRule "^(config|config\.local|db|mailer|security|access-matrix)\.php$" - [F,L]
+    RewriteRule "^(setup|migrate|seed_access)\.php$" - [F,L]
     RewriteRule "^migrations/" - [F,L]
+    RewriteRule "^uploads/" - [F,L]
+
+    # Never serve backups, dumps, logs or credentials.
+    RewriteRule "\.(sql|log|bak|old|tmp|swp|pem|key|crt|htpasswd)$" - [F,L]
 </IfModule>
 
 <IfModule mod_autoindex.c>

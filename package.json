@@ -10,6 +10,13 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "playwright test",
+    "security:unit": "node scripts/run-php-test.mjs server/php/tests/security-unit.php",
+    "security:integration": "node scripts/run-php-test.mjs server/php/tests/security-integration.php",
+    "security:secrets": "node scripts/scan-secrets.mjs",
+    "security:deps": "node scripts/scan-dependencies.mjs",
+    "security:storage": "node scripts/lock-storage.mjs",
+    "security:hack": "node scripts/hack-the-app.mjs",
+    "security:all": "npm run security:secrets && npm run security:deps && npm run security:storage && npm run security:unit && npm run security:integration && npm run security:hack",
     "preview": "vite preview",
     "print-bridge": "node scripts/thermal-printer-bridge.mjs"
   },

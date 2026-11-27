@@ -1,0 +1,27 @@
+# Locked storage for any future file uploads.
+#
+# Pictures are currently stored as validated data URLs in MySQL, so there is
+# no public upload directory. If one is introduced, this file keeps it locked:
+# nothing in it runs as PHP or CGI, nothing is listed, and nothing is served.
+
+<IfModule mod_authz_core.c>
+    Require all denied
+</IfModule>
+
+<IfModule !mod_authz_core.c>
+    Order allow,deny
+    Deny from all
+</IfModule>
+
+<IfModule mod_autoindex.c>
+    Options -Indexes -ExecCGI
+</IfModule>
+
+<IfModule mod_php.c>
+    php_flag engine off
+</IfModule>
+
+<IfModule mod_headers.c>
+    Header set X-Content-Type-Options "nosniff"
+    Header set Content-Security-Policy "default-src 'none'"
+</IfModule>

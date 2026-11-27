@@ -266,7 +266,11 @@ function PaymentStep({ onBack }: { onBack: () => void }) {
         addOns: draft.addOns,
         promoCode: draft.promoCode || undefined,
       })
-      const confirmed = await payBooking.mutateAsync(booking.reference)
+      const confirmed = await payBooking.mutateAsync({
+        reference: booking.reference,
+        email: booking.guest.email,
+        token: booking.paymentToken,
+      })
       patch({ reference: confirmed.reference })
       navigate(`/booking/confirmation/${confirmed.reference}`)
     } catch (error) {

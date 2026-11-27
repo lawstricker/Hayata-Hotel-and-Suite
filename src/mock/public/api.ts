@@ -283,8 +283,9 @@ const localPublicApi = {
     return booking
   },
 
-  async payBooking(reference: string) {
+  async payBooking(input: { reference: string; email: string; token?: string }) {
     await delay(520)
+    const reference = input.reference
     const bookings = readBookings()
     const booking = bookings.find((candidate) => candidate.reference === reference)
     if (!booking) throw new PublicApiError('Booking not found.', 'NOT_FOUND')
@@ -431,14 +432,18 @@ export const publicApi = {
     }
   },
 
-  async payBooking(reference: string) {
-    if (!SERVER_ENABLED) return localPublicApi.payBooking(reference)
+  async payBooking(input: { reference: string; email: string; token?: string }) {
+    if (!SERVER_ENABLED) return localPublicApi.payBooking(input)
     try {
-      const booking = await apiPost<PublicBooking>(`/public/bookings/${reference}/pay`, {})
-      updateStoredBooking(reference, 'CONFIRMED', 'Confirmed')
+      const booking = await apiPost<PublicBooking>(`/public/bookings/${input.reference}/pay`, { email: input.email, token: input.token })
+      updateStoredBooking(input.reference, 'CONFIRMED', 'Confirmed')
       return booking
-    } catch {
-      return localPublicApi.payBooking(reference)
+    } catch (error) {
+      // A rejected payment proof is a real refusal, not a reason to fall back
+      // to the local demo and show a booking the server never confirmed.
+      const apiError = serverErrorToPublic(error)
+      if (apiError) throw apiError
+      return localPublicApi.payBooking(input)
     }
   },
 

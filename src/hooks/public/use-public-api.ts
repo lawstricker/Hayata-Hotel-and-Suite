@@ -36,7 +36,9 @@ export function useCreatePublicBooking() {
 }
 
 export function usePayPublicBooking() {
-  return useMutation({ mutationFn: (reference: string) => publicApi.payBooking(reference) })
+  return useMutation({
+    mutationFn: (input: { reference: string; email: string; token?: string }) => publicApi.payBooking(input),
+  })
 }
 
 export function useBookingLookup(reference: string | null, email: string | null) {

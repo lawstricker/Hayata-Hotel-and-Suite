@@ -30,6 +30,8 @@ return [
 
     // Token lifetime in seconds and request throttling.
     'HAYATA_TOKEN_TTL' => '43200',
+    // A session unused for this many seconds is revoked even before it expires.
+    'HAYATA_SESSION_IDLE_TTL' => '7200',
     'HAYATA_RATE_LIMIT_MAX' => '120',
     'HAYATA_RATE_LIMIT_WINDOW' => '60',
     'HAYATA_LOGIN_MAX_ATTEMPTS' => '5',

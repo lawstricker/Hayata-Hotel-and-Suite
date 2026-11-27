@@ -19,9 +19,23 @@
     </FilesMatch>
 </IfModule>
 
-# No directory listings.
+# No directory listings, no CGI execution and no uploaded-file execution.
 <IfModule mod_autoindex.c>
-    Options -Indexes
+    Options -Indexes -ExecCGI
+</IfModule>
+
+<FilesMatch "\.(sql|log|bak|old|tmp|swp|pem|key|crt|htpasswd)$">
+    Require all denied
+</FilesMatch>
+
+<IfModule mod_headers.c>
+    Header set X-Content-Type-Options "nosniff"
+</IfModule>
+
+# Inline pictures are stored in the database; no upload directory is public.
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+    RewriteRule "^uploads/" - [F,L]
 </IfModule>
 
 # Do not advertise the PHP version or leak errors to the browser.

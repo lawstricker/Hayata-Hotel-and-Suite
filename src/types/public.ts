@@ -113,6 +113,8 @@ export interface PublicBooking {
   createdAt: string
   staffReservationId: string
   paymentStatus: 'PENDING' | 'PAID'
+  /** Short-lived HMAC proof issued with the booking; required to confirm payment. */
+  paymentToken?: string
   cancellationReason?: string
 }
 

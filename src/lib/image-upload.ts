@@ -10,6 +10,11 @@
 const MAX_DIMENSION = 640
 const MAX_INLINE_BYTES = 400_000
 const MAX_DATA_URL_BYTES = 400_000
+const MAX_SOURCE_BYTES = 12 * 1024 * 1024
+const MAX_PIXELS = 20_000_000
+// SVG, HTML and animated formats are not accepted: they can carry scripts or
+// huge payloads. The server repeats this allowlist on every write.
+const ALLOWED_MIME = new Set(['image/jpeg', 'image/png', 'image/webp'])
 
 /** Draws the image onto a canvas and encodes it as JPEG. */
 function encodeJpeg(image: HTMLImageElement, maxDimension: number, quality: number): string {
@@ -28,6 +33,8 @@ function encodeJpeg(image: HTMLImageElement, maxDimension: number, quality: numb
  * Large photos are downscaled before they are encoded.
  */
 export async function fileToDataUrl(file: File): Promise<string> {
+  if (!isImageFile(file)) throw new Error('Only JPEG, PNG and WebP pictures are accepted.')
+  if (file.size > MAX_SOURCE_BYTES) throw new Error('That picture is too large.')
   const raw = await new Promise<string>((resolve, reject) => {
     const reader = new FileReader()
     reader.onload = () => resolve(String(reader.result))
@@ -35,12 +42,17 @@ export async function fileToDataUrl(file: File): Promise<string> {
     reader.readAsDataURL(file)
   })
 
+  const declared = raw.slice(0, raw.indexOf(';base64,'))
+  if (!ALLOWED_MIME.has(declared.replace('data:', ''))) throw new Error('That file is not a supported image.')
+
   const image = await new Promise<HTMLImageElement>((resolve, reject) => {
     const element = new Image()
     element.onload = () => resolve(element)
     element.onerror = () => reject(new Error('That file is not a readable image.'))
     element.src = raw
   })
+
+  if (image.width * image.height > MAX_PIXELS) throw new Error('That picture has too many pixels.')
 
   const scale = Math.min(1, MAX_DIMENSION / Math.max(image.width, image.height))
   if (scale === 1 && raw.length <= MAX_INLINE_BYTES) return raw
@@ -59,5 +71,5 @@ export async function fileToDataUrl(file: File): Promise<string> {
 
 /** Reports whether a file looks like an image the browser can read. */
 export function isImageFile(file: File): boolean {
-  return file.type.startsWith('image/')
+  return ALLOWED_MIME.has(file.type.toLowerCase())
 }

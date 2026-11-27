@@ -11,6 +11,8 @@
  */
 declare(strict_types=1);
 
+require_once __DIR__ . '/security.php';
+
 /** The events that can trigger a guest notification. */
 function hayata_notification_events(): array {
     return [
@@ -181,8 +183,11 @@ function hayata_send_email(PDO $pdo, array $settings, string $to, string $subjec
             $result = $sent ? ['ok' => true] : ['ok' => false, 'error' => 'The mail server rejected the message.'];
         }
     } catch (Throwable $exception) {
-        $result = ['ok' => false, 'error' => $exception->getMessage()];
+        // SMTP/PHP exceptions can quote an AUTH line or a token. Nothing that
+        // looks like a credential is ever logged or returned to the browser.
+        $result = ['ok' => false, 'error' => h_redact($exception->getMessage())];
     }
+    if (isset($result['error'])) $result['error'] = h_redact((string) $result['error']);
 
     try {
         $statement = $pdo->prepare('INSERT INTO email_log (id, recipient, subject, event, status, error, created_at) VALUES (:id, :recipient, :subject, :event, :status, :error, NOW())');

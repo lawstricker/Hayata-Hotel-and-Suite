@@ -46,7 +46,26 @@ export function apiUrl(route: string) {
   return `${API_BASE}?route=${encodeURIComponent(path)}${search}`
 }
 
-export async function apiRequest<T>(route: string, init: RequestInit = {}): Promise<T> {
+/** Rotates an expired-but-still-refreshable session without a password prompt. */
+async function refreshSession(): Promise<boolean> {
+  const token = getApiToken()
+  if (!token) return false
+  try {
+    const response = await fetch(apiUrl('/auth/refresh'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+    })
+    if (!response.ok) return false
+    const data = (await response.json()) as { token?: string }
+    if (!data.token) return false
+    setApiToken(data.token)
+    return true
+  } catch {
+    return false
+  }
+}
+
+export async function apiRequest<T>(route: string, init: RequestInit = {}, allowRefresh = true): Promise<T> {
   if (!SERVER_ENABLED) throw new Error('Server integration disabled')
   const token = getApiToken()
   const response = await fetch(apiUrl(route), {
@@ -61,8 +80,11 @@ export async function apiRequest<T>(route: string, init: RequestInit = {}): Prom
   let payload: unknown
   try { payload = text ? JSON.parse(text) : null } catch { payload = text }
   if (!response.ok) {
-    // A rejected token means the session is gone: clear it so the browser
-    // cannot keep sending a credential the server has already refused.
+    // A 401 is first treated as a renewable session: rotate the token once and
+    // replay the request. If rotation fails too, the browser session is over.
+    if (response.status === 401 && token && allowRefresh && route !== '/auth/refresh' && await refreshSession()) {
+      return apiRequest<T>(route, init, false)
+    }
     if (response.status === 401) {
       setApiToken(null)
       window.dispatchEvent(new CustomEvent('hayata:session-expired'))

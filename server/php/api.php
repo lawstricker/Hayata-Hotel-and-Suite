@@ -3,6 +3,7 @@ declare(strict_types=1);
 
 require __DIR__ . '/db.php';
 require __DIR__ . '/mailer.php';
+require_once __DIR__ . '/security.php';
 
 /**
  * Turns an unexpected failure into a JSON error.
@@ -12,7 +13,7 @@ require __DIR__ . '/mailer.php';
  */
 set_exception_handler(static function (Throwable $exception): void {
     $config = hayata_config();
-    error_log('Hayata API error: ' . $exception->getMessage() . ' @ ' . $exception->getFile() . ':' . $exception->getLine());
+    hayata_log('Hayata API error: ' . $exception->getMessage() . ' @ ' . $exception->getFile() . ':' . $exception->getLine());
     if (!headers_sent()) {
         http_response_code(500);
         header('Content-Type: application/json; charset=utf-8');
@@ -28,7 +29,7 @@ set_exception_handler(static function (Throwable $exception): void {
 register_shutdown_function(static function (): void {
     $error = error_get_last();
     if ($error === null || !in_array($error['type'], [E_ERROR, E_PARSE, E_CORE_ERROR, E_COMPILE_ERROR], true)) return;
-    error_log('Hayata API fatal: ' . $error['message'] . ' @ ' . $error['file'] . ':' . $error['line']);
+    hayata_log('Hayata API fatal: ' . $error['message'] . ' @ ' . $error['file'] . ':' . $error['line']);
     if (!headers_sent()) {
         http_response_code(500);
         header('Content-Type: application/json; charset=utf-8');
@@ -200,17 +201,6 @@ function h_normalize_room(array $room): array {
     $room['floor'] = (int) h_num($room['floor'] ?? 0);
     if (array_key_exists('guestName', $room) && $room['guestName'] === null) $room['guestName'] = null;
     return $room;
-}
-
-/**
- * Strips the fields that must never leave the server from a staff record.
- *
- * The password hash and the role id are removed so a client cannot read or
- * replay them.
- */
-function h_public_user(array $user): array {
-    unset($user['password_hash'], $user['passwordHash'], $user['role_id'], $user['roleId']);
-    return $user;
 }
 
 /**
@@ -609,20 +599,114 @@ function h_error(string $message, string $code = 'VALIDATION', int $status = 400
     hayata_json(array_merge(['error' => $message, 'code' => $code], $extra), $status);
 }
 
-// Health and auth
-if ($route === '/health' && $method === 'GET') hayata_json(['ok' => true, 'database' => hayata_config()['db_name'], 'time' => date('c'), 'environment' => hayata_config()['app_env']]);
+/**
+ * The one validation gate for every public stay request.
+ *
+ * Upload fields are refused outright, all values are validated and only the
+ * named fields survive. The browser cannot inject a price, a status or an
+ * image through an extra key in the JSON body.
+ */
+function h_public_stay_input(array $body): array {
+    try {
+        h_reject_upload_fields($body);
+    } catch (HayataValidationError $error) {
+        h_error($error->getMessage(), 'UPLOAD_BLOCKED', 403);
+    }
+    $input = h_validate_or_fail($body, [
+        'slug' => ['type' => 'string', 'max' => 80],
+        'staffType' => ['type' => 'string', 'max' => 120],
+        'roomName' => ['type' => 'string', 'max' => 140],
+        'checkIn' => ['type' => 'date', 'required' => true],
+        'checkOut' => ['type' => 'date', 'required' => true],
+        'adults' => ['type' => 'int', 'min' => 1, 'max' => 12, 'default' => 1],
+        'children' => ['type' => 'int', 'min' => 0, 'max' => 10, 'default' => 0],
+        'addOns' => ['type' => 'array', 'max' => 10, 'default' => []],
+        'promoCode' => ['type' => 'string', 'max' => 40],
+    ]);
+    if ($input['checkOut'] <= $input['checkIn']) h_error('Choose a valid date range.', 'VALIDATION');
+    if ((strtotime($input['checkOut']) - strtotime($input['checkIn'])) > 60 * 86400) {
+        h_error('Choose a stay of 60 nights or fewer.', 'VALIDATION');
+    }
+    // Only known add-on switches are honoured; extra keys are ignored.
+    $input['addOns'] = h_allow_keys($input['addOns'], ['breakfast', 'airportPickup', 'lateCheckout']);
+    return $input;
+}
+
+/**
+ * Sanitises a staff resource write.
+ *
+ * Keys are normalised to column names and unknown keys are dropped, so a
+ * request cannot invent a field the client never showed. Critical fields are
+ * then validated with strict rules before the generic SQL builder sees them.
+ */
+function h_resource_input(PDO $pdo, string $table, array $body): array {
+    if (in_array($table, ['room_types', 'menu_items'], true)) {
+        try {
+            foreach (h_validate_upload_payload($body) as $key => $value) $body[$key] = $value;
+        } catch (HayataValidationError $error) {
+            h_error($error->getMessage(), 'UPLOAD_BLOCKED', 422);
+        }
+    } else {
+        try {
+            h_reject_upload_fields($body);
+        } catch (HayataValidationError $error) {
+            h_error($error->getMessage(), 'UPLOAD_BLOCKED', 403);
+        }
+    }
+
+    // `password` is not a column (only its hash is), so keep it outside the
+    // allowlist for the user-creation path to hash explicitly.
+    $password = $body['password'] ?? null;
+    $columns = h_table_columns($pdo, $table);
+    $snake = [];
+    foreach ($body as $key => $value) $snake[h_snake((string) $key)] = $value;
+    $body = h_allow_keys($snake, $columns);
+    if ($password !== null) $body['password'] = $password;
+
+    $rules = [];
+    foreach (['id', 'reference', 'guest_id', 'room_number', 'menu_item_id', 'order_id', 'user_id', 'role_id', 'supplier_id', 'item_id', 'staff_reservation_id'] as $field) {
+        if (isset($body[$field])) $rules[$field] = ['type' => 'id'];
+    }
+    foreach (['email', 'from_email'] as $field) {
+        if (isset($body[$field])) $rules[$field] = ['type' => 'email'];
+    }
+    foreach (['base_rate', 'rate', 'price', 'cost', 'total', 'subtotal', 'tax', 'discount', 'tip', 'deposit', 'amount', 'spend_total', 'open_balance'] as $field) {
+        if (isset($body[$field])) $rules[$field] = ['type' => 'number', 'min' => 0, 'max' => 100000000];
+    }
+    foreach (['quantity', 'stock', 'maximum_stock', 'reorder_point', 'reorder_qty', 'capacity', 'total_rooms', 'floor', 'seats', 'adults', 'children', 'points', 'stays', 'counted', 'variance', 'prep_minutes', 'copies'] as $field) {
+        if (isset($body[$field])) $rules[$field] = ['type' => 'int', 'min' => -1000000, 'max' => 1000000];
+    }
+    foreach (['check_in', 'check_out', 'last_stay', 'next_stay', 'expiry'] as $field) {
+        if (isset($body[$field])) $rules[$field] = ['type' => 'date'];
+    }
+    foreach (['available', 'age_restricted', 'acknowledged', 'resolved', 'enabled'] as $field) {
+        if (isset($body[$field])) $rules[$field] = ['type' => 'bool'];
+    }
+    if ($rules) {
+        foreach (h_validate_or_fail($body, $rules) as $field => $value) $body[$field] = $value;
+    }
+    return $body;
+}
+
+// Health and auth. The health check no longer discloses the database name or
+// deployment environment; those are configuration details, not diagnostics a
+// public endpoint should hand to an anonymous caller.
+if ($route === '/health' && $method === 'GET') hayata_json(h_public_health());
 
 if ($route === '/auth/login' && $method === 'POST') {
     $config = hayata_config();
-    $email = strtolower(trim((string) ($body['email'] ?? '')));
-    $password = (string) ($body['password'] ?? '');
+    // Validation happens before any credentials are looked up, so a hostile
+    // payload cannot reach the query or the password check.
+    $credentials = h_validate_or_fail($body, [
+        'email' => ['type' => 'email', 'required' => true],
+        'password' => ['type' => 'string', 'required' => true, 'min' => 1, 'max' => 200],
+    ]);
+    $email = $credentials['email'];
+    $password = $body['password'];
 
     // Sign-in attempts are throttled per address and per account.
     hayata_rate_limit($pdo, 'login:ip:' . hayata_client_ip(), $config['login_max_attempts'] * 3, $config['login_lockout']);
     hayata_rate_limit($pdo, 'login:user:' . $email, $config['login_max_attempts'], $config['login_lockout']);
-
-    if ($email === '' || $password === '') h_error('Enter your email address and password.', 'VALIDATION', 422);
-    if (strlen($password) > 200) h_error('Invalid email or password.', 'UNAUTHORIZED', 401);
 
     $statement = $pdo->prepare('SELECT u.*, r.name AS role, r.label AS role_label FROM users u JOIN roles r ON r.id = u.role_id WHERE u.email = :email');
     $statement->execute(['email' => $email]);
@@ -640,13 +724,8 @@ if ($route === '/auth/login' && $method === 'POST') {
         h_update($pdo, 'users', $user['id'], ['password_hash' => password_hash($password, PASSWORD_DEFAULT)]);
     }
 
-    $token = bin2hex(random_bytes(32));
-    h_insert($pdo, 'api_tokens', [
-        'token' => hayata_token_hash($token),
-        'user_id' => $user['id'],
-        'created_at' => date('Y-m-d H:i:s'),
-        'expires_at' => date('Y-m-d H:i:s', time() + $config['token_ttl']),
-    ]);
+    $session = h_session_create($pdo, (string) $user['id']);
+    $token = $session['token'];
     h_update($pdo, 'users', $user['id'], ['last_active' => 'Just now']);
     hayata_json(['token' => $token, 'expiresAt' => date('c', time() + $config['token_ttl']), 'user' => [
         'id' => $user['id'], 'name' => $user['name'], 'email' => $user['email'], 'role' => $user['role'],
@@ -658,16 +737,28 @@ if ($route === '/auth/logout' && $method === 'POST') {
     // The token must be read the same way the session lookup reads it, or the
     // DELETE would match no rows and the session would stay alive.
     $token = hayata_bearer_token();
-    if ($token !== null) {
-        $statement = $pdo->prepare('DELETE FROM api_tokens WHERE token = :token');
-        $statement->execute(['token' => hayata_token_hash($token)]);
-    }
+    if ($token !== null) h_session_revoke($pdo, hayata_token_hash($token));
     hayata_json(['ok' => true]);
 }
 
 if ($route === '/auth/me' && $method === 'GET') {
     $user = hayata_require_user($pdo);
     hayata_json(['user' => h_camel_keys($user)]);
+}
+
+// Rotates the bearer token. The old token stops working immediately, which
+// limits the value of a captured session and gives the browser a way to renew
+// a session without asking for the password again.
+if ($route === '/auth/refresh' && $method === 'POST') {
+    $user = hayata_require_user($pdo);
+    $old = hayata_bearer_token();
+    if ($old === null) h_error('Authentication required', 'UNAUTHORIZED', 401);
+    $session = h_session_rotate($pdo, hayata_token_hash($old), (string) $user['id']);
+    hayata_json([
+        'token' => $session['token'],
+        'expiresAt' => date('c', time() + hayata_config()['token_ttl']),
+        'idleTimeout' => hayata_session_idle_seconds(),
+    ]);
 }
 
 if ($route === '/auth/password' && $method === 'POST') {
@@ -681,9 +772,9 @@ if ($route === '/auth/password' && $method === 'POST') {
     $hash = (string) $statement->fetchColumn();
     if (!password_verify($current, $hash)) h_error('Your current password is not correct.', 'UNAUTHORIZED', 401);
     h_update($pdo, 'users', $user['id'], ['password_hash' => password_hash($next, PASSWORD_DEFAULT)]);
-    // Every other session for this account is invalidated.
-    $revoke = $pdo->prepare('DELETE FROM api_tokens WHERE user_id = :user_id');
-    $revoke->execute(['user_id' => $user['id']]);
+    // Every session for this account is invalidated, including the one that
+    // performed the change; the client will be signed out on its next call.
+    h_session_revoke_all($pdo, (string) $user['id']);
     hayata_json(['ok' => true]);
 }
 
@@ -696,11 +787,19 @@ if ($route === '/public/room-types' && $method === 'GET') {
 
 // Public availability
 if ($route === '/public/availability' && $method === 'GET') {
-    $checkIn = (string) ($query['checkIn'] ?? '');
-    $checkOut = (string) ($query['checkOut'] ?? '');
-    if (!$checkIn || !$checkOut || $checkOut <= $checkIn) h_error('Choose a valid date range.', 'VALIDATION');
-    $category = (string) ($query['category'] ?? 'all');
-    $guests = (int) ($query['adults'] ?? 1) + (int) ($query['children'] ?? 0);
+    $filters = h_validate_or_fail($query, [
+        'checkIn' => ['type' => 'date', 'required' => true],
+        'checkOut' => ['type' => 'date', 'required' => true],
+        'category' => ['type' => 'enum', 'in' => ['all', 'Room', 'Apartment'], 'default' => 'all'],
+        'adults' => ['type' => 'int', 'min' => 1, 'max' => 12, 'default' => 1],
+        'children' => ['type' => 'int', 'min' => 0, 'max' => 10, 'default' => 0],
+    ]);
+    $checkIn = $filters['checkIn'];
+    $checkOut = $filters['checkOut'];
+    if ($checkOut <= $checkIn) h_error('Choose a valid date range.', 'VALIDATION');
+    if ((strtotime($checkOut) - strtotime($checkIn)) > 60 * 86400) h_error('Choose a stay of 60 nights or fewer.', 'VALIDATION');
+    $category = $filters['category'];
+    $guests = $filters['adults'] + $filters['children'];
     $rows = $pdo->query('SELECT * FROM room_types ORDER BY id')->fetchAll();
     $results = [];
     foreach ($rows as $row) {
@@ -724,29 +823,44 @@ if ($route === '/public/availability' && $method === 'GET') {
 
 // Public quote
 if ($route === '/public/quote' && $method === 'POST') {
+    $input = h_public_stay_input($body);
     $statement = $pdo->prepare('SELECT * FROM room_types WHERE name = :name');
-    $statement->execute(['name' => $body['staffType'] ?? $body['roomName'] ?? '']);
+    $statement->execute(['name' => $input['staffType'] ?? $input['roomName'] ?? '']);
     $row = $statement->fetch();
     if (!$row) {
         $rows = $pdo->query('SELECT * FROM room_types')->fetchAll();
         foreach ($rows as $candidate) {
-            if (h_slug($candidate['name']) === ($body['slug'] ?? '')) { $row = $candidate; break; }
+            if (h_slug($candidate['name']) === ($input['slug'] ?? '')) { $row = $candidate; break; }
         }
     }
     if (!$row) h_error('Room type not found.', 'NOT_FOUND', 404);
     $roomType = h_public_room_type(h_decode_row($row));
-    hayata_json(h_quote_from_data($roomType, (string) $body['checkIn'], (string) $body['checkOut'], $body['addOns'] ?? [], $body['promoCode'] ?? null, (int) ($body['adults'] ?? 1) + (int) ($body['children'] ?? 0)));
+    hayata_json(h_quote_from_data($roomType, $input['checkIn'], $input['checkOut'], $input['addOns'], $input['promoCode'] ?? null, $input['adults'] + $input['children']));
 }
 
-// Public booking create
+// Public booking create. The quote and the transaction live on the server so a
+// browser cannot change a rate, a discount or the status of a booking.
 if ($route === '/public/bookings' && $method === 'POST') {
+    $input = h_public_stay_input($body);
+    $guest = h_validate_or_fail(is_array($body['guest'] ?? null) ? $body['guest'] : [], [
+        'firstName' => ['type' => 'text', 'required' => true, 'min' => 1, 'max' => 80],
+        'lastName' => ['type' => 'text', 'required' => true, 'min' => 1, 'max' => 80],
+        'email' => ['type' => 'email', 'required' => true],
+        'phone' => ['type' => 'string', 'required' => true, 'min' => 1, 'max' => 60],
+        'country' => ['type' => 'text', 'max' => 80],
+        'notes' => ['type' => 'text', 'max' => 1000],
+        'requests' => ['type' => 'text', 'max' => 1000],
+        'acceptTerms' => ['type' => 'bool', 'required' => true],
+    ]);
+    if (!$guest['acceptTerms']) h_error('Please accept the booking terms.', 'VALIDATION');
+
     $rows = $pdo->query('SELECT * FROM room_types')->fetchAll();
     $roomType = null;
     foreach ($rows as $candidate) {
-        if (h_slug($candidate['name']) === ($body['slug'] ?? '')) { $roomType = h_public_room_type(h_decode_row($candidate)); break; }
+        if (h_slug($candidate['name']) === ($input['slug'] ?? '')) { $roomType = h_public_room_type(h_decode_row($candidate)); break; }
     }
     if (!$roomType) h_error('Room type not found.', 'NOT_FOUND', 404);
-    $checkIn = (string) $body['checkIn']; $checkOut = (string) $body['checkOut'];
+    $checkIn = $input['checkIn']; $checkOut = $input['checkOut'];
     $available = h_available_rooms($pdo, $roomType['staffType'], $checkIn, $checkOut);
     if (!$available) {
         $alternatives = [];
@@ -761,84 +875,132 @@ if ($route === '/public/bookings' && $method === 'POST') {
         }
         h_error('Sorry, that room was just taken. Please choose another room.', 'CONFLICT', 409, ['availableRooms' => $alternatives]);
     }
-    $guest = is_array($body['guest'] ?? null) ? $body['guest'] : [];
-    // Free-text fields are cleaned before they are stored, so a payload can
-    // never carry markup into a staff screen.
-    foreach (['firstName', 'lastName', 'email', 'phone', 'country', 'notes', 'requests'] as $field) {
-        if (isset($guest[$field]) && is_string($guest[$field])) $guest[$field] = hayata_clean_text($guest[$field]);
-    }
-    if (!empty($guest['email']) && !filter_var((string) $guest['email'], FILTER_VALIDATE_EMAIL)) {
-        h_error('Enter a valid email address.');
-    }
-    if (empty($guest['acceptTerms'])) h_error('Please accept the booking terms.', 'VALIDATION');
     do { $reference = hayata_reference(); $check = $pdo->prepare('SELECT COUNT(*) FROM public_bookings WHERE reference = :ref'); $check->execute(['ref' => $reference]); } while ($check->fetchColumn() > 0);
-    $quote = h_quote_from_data($roomType, $checkIn, $checkOut, $body['addOns'] ?? [], $body['promoCode'] ?? null, (int) ($body['adults'] ?? 1) + (int) ($body['children'] ?? 0));
+    $quote = h_quote_from_data($roomType, $checkIn, $checkOut, $input['addOns'], $input['promoCode'] ?? null, $input['adults'] + $input['children']);
     $reservationId = 'res-online-' . $reference;
-    h_insert($pdo, 'reservations', [
-        'id' => $reservationId, 'guest_id' => 'guest-online-' . $reference,
-        'guest_name' => ($guest['firstName'] ?? 'Guest') . ' ' . ($guest['lastName'] ?? ''),
-        'room_type' => $roomType['staffType'], 'room_number' => $available[0],
-        'check_in' => $checkIn, 'check_out' => $checkOut, 'adults' => $body['adults'] ?? 1,
-        'children' => $body['children'] ?? 0, 'status' => 'Pending', 'source' => 'ONLINE',
-        'channel' => 'WEBSITE', 'rate_plan' => 'Website flexible',
-        'rate' => round($quote['roomSubtotal'] / max(1, $quote['nights']), 2), 'deposit' => 0,
-        'add_ons' => array_column($quote['addOnLines'], 'label'), 'total' => $quote['total'],
-    ]);
-    h_insert($pdo, 'public_bookings', [
-        'reference' => $reference, 'status' => 'PENDING_PAYMENT', 'check_in' => $checkIn, 'check_out' => $checkOut,
-        'adults' => $body['adults'] ?? 1, 'children' => $body['children'] ?? 0, 'slug' => $roomType['slug'],
-        'room_name' => $roomType['name'], 'assigned_room_number' => $available[0],
-        'guest' => $guest, 'add_ons' => $body['addOns'] ?? [], 'quote' => $quote,
-        'promo_code' => $quote['promoCode'], 'payment_status' => 'PENDING', 'staff_reservation_id' => $reservationId,
-    ]);
+    // The stay, the guest booking and the room assignment are written together.
+    // A failure can no longer leave a reservation with no guest-facing record.
+    $pdo->beginTransaction();
+    try {
+        // Re-check availability inside the transaction: two guests quoting at
+        // the same time must not both receive the last room.
+        $available = h_available_rooms($pdo, $roomType['staffType'], $checkIn, $checkOut);
+        if (!$available) {
+            $pdo->rollBack();
+            h_error('Sorry, that room was just taken. Please choose another room.', 'CONFLICT', 409);
+        }
+        h_insert($pdo, 'reservations', [
+            'id' => $reservationId, 'guest_id' => 'guest-online-' . $reference,
+            'guest_name' => $guest['firstName'] . ' ' . $guest['lastName'],
+            'room_type' => $roomType['staffType'], 'room_number' => $available[0],
+            'check_in' => $checkIn, 'check_out' => $checkOut, 'adults' => $input['adults'],
+            'children' => $input['children'], 'status' => 'Pending', 'source' => 'ONLINE',
+            'channel' => 'WEBSITE', 'rate_plan' => 'Website flexible',
+            'rate' => round($quote['roomSubtotal'] / max(1, $quote['nights']), 2), 'deposit' => 0,
+            'add_ons' => array_column($quote['addOnLines'], 'label'), 'total' => $quote['total'],
+        ]);
+        h_insert($pdo, 'public_bookings', [
+            'reference' => $reference, 'status' => 'PENDING_PAYMENT', 'check_in' => $checkIn, 'check_out' => $checkOut,
+            'adults' => $input['adults'], 'children' => $input['children'], 'slug' => $roomType['slug'],
+            'room_name' => $roomType['name'], 'assigned_room_number' => $available[0],
+            'guest' => $guest, 'add_ons' => $input['addOns'], 'quote' => $quote,
+            'promo_code' => $quote['promoCode'], 'payment_status' => 'PENDING', 'staff_reservation_id' => $reservationId,
+        ]);
+        $pdo->commit();
+    } catch (Throwable $exception) {
+        if ($pdo->inTransaction()) $pdo->rollBack();
+        throw $exception;
+    }
     $statement = $pdo->prepare('SELECT * FROM public_bookings WHERE reference = :ref');
     $statement->execute(['ref' => $reference]);
-    hayata_json(h_public_booking($pdo, $statement->fetch()), 201);
+    $booking = h_public_booking($pdo, $statement->fetch());
+    // A signed token is the only proof the pay endpoint accepts. It is bound
+    // to the reference, the server-computed total and the guest's email.
+    $booking['paymentToken'] = h_payment_token($reference, (float) $quote['total'], $guest['email']);
+    hayata_json(h_public_booking_trim($booking), 201);
 }
 
 if (preg_match('#^/public/bookings/([^/]+)/pay$#', $route, $matches) && $method === 'POST') {
-    $reference = strtoupper($matches[1]);
+    $reference = strtoupper(h_valid_id($matches[1]) ? $matches[1] : '');
+    if ($reference === '') h_error('Booking not found.', 'NOT_FOUND', 404);
     $statement = $pdo->prepare('SELECT * FROM public_bookings WHERE reference = :ref');
     $statement->execute(['ref' => $reference]);
     $booking = $statement->fetch();
     if (!$booking) h_error('Booking not found.', 'NOT_FOUND', 404);
-    h_update($pdo, 'public_bookings', $reference, ['status' => 'CONFIRMED', 'payment_status' => 'PAID']);
-    h_update($pdo, 'reservations', $booking['staff_reservation_id'], ['status' => 'Confirmed']);
+    $proof = h_validate_or_fail($body, [
+        'email' => ['type' => 'email', 'required' => true],
+        'token' => ['type' => 'string', 'required' => true, 'min' => 32, 'max' => 128],
+    ]);
+    $quote = json_decode((string) $booking['quote'], true) ?: [];
+    $total = h_num($quote['total'] ?? 0);
+    // Without the signed token (issued at booking time and bound to the
+    // guest's email and server-computed total) nobody can confirm a stay just
+    // by guessing a reference.
+    if (!h_verify_payment_token($reference, $total, $proof['email'], $proof['token'])) {
+        h_rls_denied($pdo, ['id' => 'anonymous'], 'public_bookings', 'payment', $reference);
+        h_error('This payment could not be verified.', 'PAYMENT_INVALID', 403);
+    }
+    if (($booking['status'] ?? '') !== 'PENDING_PAYMENT') h_error('This booking has already been paid.', 'CONFLICT', 409);
+    $pdo->beginTransaction();
+    try {
+        h_update($pdo, 'public_bookings', $reference, ['status' => 'CONFIRMED', 'payment_status' => 'PAID']);
+        h_update($pdo, 'reservations', $booking['staff_reservation_id'], ['status' => 'Confirmed']);
+        $pdo->commit();
+    } catch (Throwable $exception) {
+        if ($pdo->inTransaction()) $pdo->rollBack();
+        throw $exception;
+    }
     // The guest receives the booking confirmation by email.
     hayata_notify_reservation_event($pdo, 'booking_confirmed', (string) $booking['staff_reservation_id']);
     $statement->execute(['ref' => $reference]);
-    hayata_json(h_public_booking($pdo, $statement->fetch()));
+    hayata_json(h_public_booking_trim(h_public_booking($pdo, $statement->fetch())));
 }
 
 if (preg_match('#^/public/bookings/([^/]+)$#', $route, $matches) && $method === 'GET') {
-    $reference = strtoupper($matches[1]);
+    $reference = strtoupper(h_valid_id($matches[1]) ? $matches[1] : '');
+    if ($reference === '') h_error('Booking not found.', 'NOT_FOUND', 404);
     $statement = $pdo->prepare('SELECT * FROM public_bookings WHERE reference = :ref');
     $statement->execute(['ref' => $reference]);
     $booking = $statement->fetch();
     if (!$booking) h_error('Booking not found.', 'NOT_FOUND', 404);
-    $email = strtolower(trim((string) ($query['email'] ?? '')));
-    if ($email && strtolower($booking['guest_email'] ?? '') !== $email) {
-        $guest = json_decode($booking['guest'], true) ?: [];
-        if (strtolower($guest['email'] ?? '') !== $email) h_error('The email does not match this booking.', 'EMAIL_MISMATCH', 403);
+    $filters = h_validate_or_fail($query, ['email' => ['type' => 'email']]);
+    $email = (string) ($filters['email'] ?? '');
+    if ($email !== '') {
+        $guest = json_decode((string) $booking['guest'], true) ?: [];
+        if (!hash_equals(strtolower((string) ($guest['email'] ?? '')), $email)) {
+            h_error('The email does not match this booking.', 'EMAIL_MISMATCH', 403);
+        }
     }
-    hayata_json(h_public_booking($pdo, $booking));
+    hayata_json(h_public_booking_trim(h_public_booking($pdo, $booking)));
 }
 
 if (preg_match('#^/public/bookings/([^/]+)/cancel$#', $route, $matches) && $method === 'POST') {
-    $reference = strtoupper($matches[1]);
+    $reference = strtoupper(h_valid_id($matches[1]) ? $matches[1] : '');
+    if ($reference === '') h_error('Booking not found.', 'NOT_FOUND', 404);
     $statement = $pdo->prepare('SELECT * FROM public_bookings WHERE reference = :ref');
     $statement->execute(['ref' => $reference]);
     $booking = $statement->fetch();
     if (!$booking) h_error('Booking not found.', 'NOT_FOUND', 404);
-    $guest = json_decode($booking['guest'], true) ?: [];
-    if (strtolower($guest['email'] ?? '') !== strtolower(trim((string) ($body['email'] ?? '')))) h_error('The email does not match this booking.', 'EMAIL_MISMATCH', 403);
-    $hours = (strtotime($booking['check_in']) - time()) / 3600;
-    $cancellationHours = (int) ($query['cancellationHours'] ?? 48);
+    $proof = h_validate_or_fail($body, ['email' => ['type' => 'email', 'required' => true]]);
+    $guest = json_decode((string) $booking['guest'], true) ?: [];
+    if (!hash_equals(strtolower((string) ($guest['email'] ?? '')), $proof['email'])) h_error('The email does not match this booking.', 'EMAIL_MISMATCH', 403);
+    if (($booking['status'] ?? '') === 'CANCELLED') h_error('This booking is already cancelled.', 'CONFLICT', 409);
+    $hours = (strtotime((string) $booking['check_in']) - time()) / 3600;
+    // The policy comes from the room type on the server. A client can no
+    // longer pass `?cancellationHours=0` to bypass the cancellation window.
+    $cancellationHours = in_array((string) $booking['slug'], ['executive-suite', 'hayata-suite'], true) ? 72 : 48;
     if ($booking['status'] === 'CONFIRMED' && $hours < $cancellationHours) h_error("This booking can only be cancelled more than {$cancellationHours} hours before arrival.", 'POLICY');
-    h_update($pdo, 'public_bookings', $reference, ['status' => 'CANCELLED']);
-    h_update($pdo, 'reservations', $booking['staff_reservation_id'], ['status' => 'Cancelled']);
+    $pdo->beginTransaction();
+    try {
+        h_update($pdo, 'public_bookings', $reference, ['status' => 'CANCELLED']);
+        h_update($pdo, 'reservations', $booking['staff_reservation_id'], ['status' => 'Cancelled']);
+        $pdo->commit();
+    } catch (Throwable $exception) {
+        if ($pdo->inTransaction()) $pdo->rollBack();
+        throw $exception;
+    }
     $statement->execute(['ref' => $reference]);
-    hayata_json(h_public_booking($pdo, $statement->fetch()));
+    hayata_json(h_public_booking_trim(h_public_booking($pdo, $statement->fetch())));
 }
 
 /**
@@ -987,42 +1149,72 @@ if ($route === '/public/menu' && $method === 'GET') {
         'SELECT id, name, category, outlet, price, cost, available, image, description, station, age_restricted, prep_minutes
          FROM menu_items WHERE available = 1 ORDER BY category, name'
     );
-    hayata_json(h_normalize_menu_items(h_decode_rows($statement->fetchAll())));
+    hayata_json(h_public_menu_items(h_normalize_menu_items(h_decode_rows($statement->fetchAll()))));
+}
+
+/**
+ * Validates the compact payload an in-room guest sends. Prices and menu names
+ * in the request are discarded; the server re-prices every line from the menu.
+ */
+function h_room_order_input(array $data): array {
+    try {
+        h_reject_upload_fields($data);
+    } catch (HayataValidationError $error) {
+        h_error($error->getMessage(), 'UPLOAD_BLOCKED', 403);
+    }
+    $input = h_validate_or_fail($data, [
+        'roomNumber' => ['type' => 'string', 'required' => true, 'min' => 1, 'max' => 20, 'pattern' => '/^[A-Za-z0-9-]+$/'],
+        'email' => ['type' => 'email'],
+        'instructions' => ['type' => 'text', 'max' => 500],
+        'items' => ['type' => 'array', 'required' => true, 'max' => 30],
+        'payment' => ['type' => 'array', 'max' => 10],
+    ]);
+    $input['roomNumber'] = strtoupper($input['roomNumber']);
+    return $input;
 }
 
 // The stay behind a room's permanent in-room QR code.
 if ($route === '/public/room-orders/stay' && $method === 'GET') {
-    $roomNumber = strtoupper(trim((string) ($query['room'] ?? '')));
-    if ($roomNumber === '') h_error('Room number is required.', 'VALIDATION');
+    $filters = h_validate_or_fail($query, ['room' => ['type' => 'string', 'required' => true, 'min' => 1, 'max' => 20, 'pattern' => '/^[A-Za-z0-9-]+$/']]);
+    $roomNumber = strtoupper($filters['room']);
     hayata_json(h_public_room_stay($pdo, $roomNumber));
 }
 
 // Guest in-room dining: quote the basket before the guest pays.
 if ($route === '/public/room-orders/quote' && $method === 'POST') {
-    $roomNumber = strtoupper(trim((string) ($body['roomNumber'] ?? '')));
-    if ($roomNumber === '') h_error('Room number is required.', 'VALIDATION');
-    hayata_json(h_room_order_quote($pdo, $roomNumber, (array) ($body['items'] ?? [])));
+    $input = h_room_order_input($body);
+    hayata_json(h_room_order_quote($pdo, $input['roomNumber'], $input['items']));
 }
 
 // Guest in-room dining: a paid order is the only way a ticket reaches the kitchen.
 if ($route === '/public/room-orders' && $method === 'POST') {
-    $roomNumber = strtoupper(trim((string) ($body['roomNumber'] ?? '')));
-    if ($roomNumber === '') h_error('Room number is required.', 'VALIDATION');
-    $quote = h_room_order_quote($pdo, $roomNumber, (array) ($body['items'] ?? []));
+    $input = h_room_order_input($body);
+    $quote = h_room_order_quote($pdo, $input['roomNumber'], $input['items']);
 
-    $payment = (array) ($body['payment'] ?? []);
-    $reference = trim((string) ($payment['reference'] ?? ''));
-    if ($reference === '') h_error('Payment is required before the order reaches the kitchen.', 'PAYMENT_REQUIRED', 402);
-    $paidAmount = round((float) ($payment['amount'] ?? 0), 2);
+    $payment = h_validate_or_fail((array) ($input['payment'] ?? []), [
+        'reference' => ['type' => 'string', 'required' => true, 'min' => 4, 'max' => 120],
+        'amount' => ['type' => 'number', 'required' => true, 'min' => 0, 'max' => 1000000],
+        'method' => ['type' => 'string', 'max' => 40],
+    ]);
+    $reference = $payment['reference'];
+    $paidAmount = round($payment['amount'], 2);
     if ($paidAmount + 0.01 < $quote['total']) h_error('The payment does not cover the order total.', 'PAYMENT_INCOMPLETE', 402);
 
     $orderId = 'room-' . strtolower(bin2hex(random_bytes(8)));
     $paymentId = 'pay-' . strtolower(bin2hex(random_bytes(8)));
-    $email = trim((string) ($body['email'] ?? ''));
-    $instructions = trim((string) ($body['instructions'] ?? ''));
+    $email = (string) ($input['email'] ?? '');
+    $instructions = (string) ($input['instructions'] ?? '');
 
     try {
         $pdo->beginTransaction();
+        // A captured payment response can only create one ticket: the
+        // reference is claimed atomically with the order and the payment.
+        try {
+            h_payment_reference_claim($pdo, $reference, $paidAmount, $orderId);
+        } catch (HayataValidationError $error) {
+            $pdo->rollBack();
+            h_error($error->getMessage(), 'PAYMENT_REPLAY', 409);
+        }
         h_insert($pdo, 'orders', [
             'id' => $orderId,
             'order_number' => h_room_order_number($pdo),
@@ -1103,45 +1295,52 @@ if ($route === '/public/room-orders' && $method === 'POST') {
 }
 
 if ($route === '/public/enquiries' && $method === 'POST') {
-    if (empty($body['name']) || empty($body['email']) || empty($body['message'])) h_error('Please complete all required fields.');
-    if (!filter_var((string) $body['email'], FILTER_VALIDATE_EMAIL)) h_error('Enter a valid email address.');
-    if (mb_strlen((string) $body['message']) > 5000) h_error('Your message is too long.');
-    h_insert($pdo, 'public_enquiries', [
-        'name' => hayata_clean_text((string) $body['name']),
-        'email' => hayata_clean_text((string) $body['email']),
-        'subject' => hayata_clean_text((string) ($body['subject'] ?? 'General enquiry')),
-        'message' => hayata_clean_text((string) $body['message']),
+    try {
+        h_reject_upload_fields($body);
+    } catch (HayataValidationError $error) {
+        h_error($error->getMessage(), 'UPLOAD_BLOCKED', 403);
+    }
+    $enquiry = h_validate_or_fail($body, [
+        'name' => ['type' => 'text', 'required' => true, 'min' => 1, 'max' => 120],
+        'email' => ['type' => 'email', 'required' => true],
+        'subject' => ['type' => 'text', 'max' => 180, 'default' => 'General enquiry'],
+        'message' => ['type' => 'text', 'required' => true, 'min' => 1, 'max' => 5000],
     ]);
+    h_insert($pdo, 'public_enquiries', $enquiry);
     hayata_json(['ok' => true], 201);
 }
 
 if ($route === '/public/newsletter' && $method === 'POST') {
-    $email = trim((string) ($body['email'] ?? ''));
-    if (!filter_var($email, FILTER_VALIDATE_EMAIL)) h_error('Enter a valid email address.');
+    $input = h_validate_or_fail($body, ['email' => ['type' => 'email', 'required' => true]]);
     $statement = $pdo->prepare('INSERT IGNORE INTO newsletter_subscribers (email) VALUES (:email)');
-    $statement->execute(['email' => $email]);
+    $statement->execute(['email' => $input['email']]);
     hayata_json(['ok' => true], 201);
 }
 
 // Status transitions
 if (preg_match('#^/reservations/([^/]+)/status$#', $route, $matches) && $method === 'POST') {
     hayata_require_permission($pdo, 'reservation.edit');
-    $id = $matches[1];
-    $status = (string) ($body['status'] ?? 'Confirmed');
+    $id = h_valid_id($matches[1]) ? $matches[1] : '';
+    if ($id === '') h_error('Not found.', 'NOT_FOUND', 404);
+    $input = h_validate_or_fail($body, [
+        'status' => ['type' => 'enum', 'in' => h_allowed_status('reservation'), 'default' => 'Confirmed'],
+        'roomNumber' => ['type' => 'string', 'max' => 20, 'pattern' => '/^[A-Za-z0-9-]*$/'],
+    ]);
+    $status = $input['status'];
 
     // The room is only replaced when one is sent. A check-out that carried no
     // room number used to erase the room from the reservation, which lost the
     // link between the stay and the folio.
     $updates = ['status' => $status];
-    if (!empty($body['roomNumber'])) $updates['room_number'] = $body['roomNumber'];
+    if (!empty($input['roomNumber'])) $updates['room_number'] = $input['roomNumber'];
     h_update($pdo, 'reservations', $id, $updates);
 
-    if ($status === 'Checked in' && !empty($body['roomNumber'])) {
+    if ($status === 'Checked in' && !empty($input['roomNumber'])) {
         $statement = $pdo->prepare('SELECT guest_name FROM reservations WHERE id = :id');
         $statement->execute(['id' => $id]);
         $guestName = $statement->fetchColumn();
         $roomStatement = $pdo->prepare('UPDATE rooms SET status = \'Occupied\', guest_name = :guest WHERE number = :number');
-        $roomStatement->execute(['guest' => $guestName, 'number' => $body['roomNumber']]);
+        $roomStatement->execute(['guest' => $guestName, 'number' => $input['roomNumber']]);
     }
 
     // A checked-out guest frees the room again, so the permanent QR code of
@@ -1171,34 +1370,51 @@ if (preg_match('#^/reservations/([^/]+)/status$#', $route, $matches) && $method 
 
 if (preg_match('#^/orders/([^/]+)/status$#', $route, $matches) && $method === 'POST') {
     hayata_require_permission($pdo, 'restaurant.orders');
-    h_update($pdo, 'orders', $matches[1], ['status' => $body['status'] ?? 'New']);
+    $id = h_valid_id($matches[1]) ? $matches[1] : '';
+    if ($id === '') h_error('Not found.', 'NOT_FOUND', 404);
+    $input = h_validate_or_fail($body, ['status' => ['type' => 'enum', 'in' => h_allowed_status('order'), 'default' => 'New']]);
+    h_update($pdo, 'orders', $id, ['status' => $input['status']]);
     $statement = $pdo->prepare('SELECT * FROM orders WHERE id = :id');
-    $statement->execute(['id' => $matches[1]]);
+    $statement->execute(['id' => $id]);
     hayata_json(h_decode_row($statement->fetch()));
 }
 
 if (preg_match('#^/inventory/([^/]+)/adjust$#', $route, $matches) && $method === 'POST') {
     hayata_require_permission($pdo, 'inventory.manage');
+    $id = h_valid_id($matches[1]) ? $matches[1] : '';
+    if ($id === '') h_error('Not found.', 'NOT_FOUND', 404);
+    $input = h_validate_or_fail($body, ['delta' => ['type' => 'int', 'required' => true, 'min' => -100000, 'max' => 100000]]);
     $statement = $pdo->prepare('SELECT stock FROM inventory_items WHERE id = :id');
-    $statement->execute(['id' => $matches[1]]);
+    $statement->execute(['id' => $id]);
     $current = (int) $statement->fetchColumn();
-    $next = max(0, $current + (int) ($body['delta'] ?? 0));
-    h_update($pdo, 'inventory_items', $matches[1], ['stock' => $next, 'last_updated' => date('Y-m-d H:i:s')]);
-    $statement->execute(['id' => $matches[1]]);
+    $next = max(0, $current + $input['delta']);
+    h_update($pdo, 'inventory_items', $id, ['stock' => $next, 'last_updated' => date('Y-m-d H:i:s')]);
+    $statement->execute(['id' => $id]);
     hayata_json(h_decode_row($statement->fetch()));
 }
 
-// Printer settings
+// Printer settings. The bridge token is a credential, so both reads and writes
+// require the settings permission and only known keys are accepted.
 if ($route === '/printer-settings' && $method === 'GET') {
-    hayata_require_user($pdo);
+    hayata_require_permission($pdo, 'settings.manage');
     $value = $pdo->query("SELECT setting_value FROM printer_settings WHERE setting_key = 'default'")->fetchColumn();
     hayata_json(json_decode($value ?: '{}', true) ?: []);
 }
 if ($route === '/printer-settings' && $method === 'PUT') {
     hayata_require_permission($pdo, 'settings.manage');
+    $settings = h_validate_or_fail($body, [
+        'enabled' => ['type' => 'bool', 'default' => true],
+        'bridgeHost' => ['type' => 'string', 'max' => 120, 'default' => '127.0.0.1'],
+        'bridgePort' => ['type' => 'string', 'max' => 10, 'default' => '8787'],
+        'printerIp' => ['type' => 'string', 'max' => 120, 'default' => '127.0.0.1'],
+        'printerPort' => ['type' => 'string', 'max' => 10, 'default' => '9100'],
+        'authToken' => ['type' => 'string', 'max' => 200, 'default' => ''],
+        'paperWidth' => ['type' => 'enum', 'in' => ['80mm', '58mm'], 'default' => '80mm'],
+        'copies' => ['type' => 'int', 'min' => 1, 'max' => 10, 'default' => 1],
+    ]);
     $statement = $pdo->prepare("UPDATE printer_settings SET setting_value = :value WHERE setting_key = 'default'");
-    $statement->execute(['value' => json_encode($body, JSON_UNESCAPED_UNICODE)]);
-    hayata_json($body);
+    $statement->execute(['value' => json_encode($settings, JSON_UNESCAPED_UNICODE)]);
+    hayata_json($settings);
 }
 
 // Guest notifications (SMTP)
@@ -1280,8 +1496,8 @@ if ($route === '/notifications/log' && $method === 'GET') {
 // The list is filtered and counted on the server so the dashboard can show
 // every recorded action, not only the first page of rows.
 if ($route === '/audit-logs' && $method === 'GET') {
-    hayata_require_user($pdo);
-    $limit = min(1000, max(1, (int) ($query['limit'] ?? 300)));
+    hayata_require_permission($pdo, 'dashboard.view');
+    $limit = min(500, max(1, (int) ($query['limit'] ?? 300)));
     $conditions = [];
     $params = [];
 
@@ -1369,9 +1585,11 @@ if ($route === '/audit-logs' && $method === 'GET') {
     ]);
 }
 
-// Bootstrap bundle for staff hydration
+// Bootstrap bundle for staff hydration. Sensitive tables are gated by the
+// same permissions that protect their CRUD routes, so a low-privilege account
+// cannot download the whole staff directory or the audit trail in one call.
 if ($route === '/bootstrap' && $method === 'GET') {
-    hayata_require_user($pdo);
+    $caller = hayata_require_user($pdo);
     $tables = [
         'roles' => 'roles', 'permissions' => 'permissions', 'users' => 'users', 'roomTypes' => 'room_types',
         'rooms' => 'rooms', 'guests' => 'guests', 'reservations' => 'reservations', 'orders' => 'orders',
@@ -1381,10 +1599,19 @@ if ($route === '/bootstrap' && $method === 'GET') {
         'folios' => 'folios', 'invoices' => 'invoices', 'payments' => 'payments', 'campaigns' => 'campaigns',
         'feedback' => 'feedback', 'shifts' => 'shifts', 'events' => 'events', 'auditLogs' => 'audit_logs',
         'housekeeping' => 'housekeeping_tasks', 'maintenance' => 'maintenance_tickets',
+        'publicBookings' => 'public_bookings',
+    ];
+    $sensitive = [
+        'users' => 'staff.view', 'auditLogs' => 'dashboard.view', 'publicBookings' => 'reservation.view',
+        'payments' => 'billing.view', 'invoices' => 'billing.view', 'folios' => 'billing.view',
     ];
     $output = [];
     foreach ($tables as $key => $table) {
-        $output[$key] = h_decode_rows($pdo->query("SELECT * FROM `$table` ORDER BY 1")->fetchAll());
+        if (isset($sensitive[$key]) && !hayata_has_permission($pdo, (string) $caller['id'], $sensitive[$key])) {
+            $output[$key] = [];
+            continue;
+        }
+        $output[$key] = h_trim_responses($table, h_decode_rows($pdo->query("SELECT * FROM `$table` ORDER BY 1")->fetchAll()));
     }
     // Orders store their lines in `order_items`; join them in so the client receives complete orders.
     $output['orders'] = h_attach_order_items($pdo, $output['orders'] ?? []);
@@ -1407,12 +1634,16 @@ if (preg_match('#^/resource/([a-z-]+)(?:/([^/]+))?$#', $route, $matches)) {
     $resource = $matches[1];
     if (!isset($map[$resource])) h_error('Unknown resource.', 'NOT_FOUND', 404);
     $table = $map[$resource];
-    hayata_require_user($pdo);
+    $caller = hayata_require_user($pdo);
     $id = $matches[2] ?? null;
+    if ($id !== null && !h_valid_id($id)) h_error('Not found.', 'NOT_FOUND', 404);
 
     if ($method === 'GET' && !$id) {
         $limit = min(500, max(1, (int) ($query['limit'] ?? 200)));
         $rows = h_decode_rows($pdo->query("SELECT * FROM `$table` ORDER BY " . h_list_order($table) . " LIMIT $limit")->fetchAll());
+        // Row-level policies run before any response is built. A caller who
+        // cannot see a row never receives it, even though the SQL list read it.
+        $rows = h_rls_filter($pdo, $caller, $table, $rows);
         if ($table === 'orders') $rows = h_attach_order_items($pdo, $rows);
         if ($table === 'menu_items') $rows = h_normalize_menu_items($rows);
         if ($table === 'room_types') $rows = array_map('h_normalize_room_type', $rows);
@@ -1420,28 +1651,23 @@ if (preg_match('#^/resource/([a-z-]+)(?:/([^/]+))?$#', $route, $matches)) {
         // The staff directory only exposes the columns the screen needs, and
         // never the password hash.
         if ($table === 'users') $rows = array_map('h_public_user', $rows);
-        hayata_json($rows);
+        hayata_json(h_trim_responses($table, $rows));
     }
     if ($method === 'GET' && $id) {
-        $statement = $pdo->prepare("SELECT * FROM `$table` WHERE id = :id LIMIT 1");
+        $keyColumn = $table === 'public_bookings' ? 'reference' : 'id';
+        $statement = $pdo->prepare("SELECT * FROM `$table` WHERE `$keyColumn` = :id LIMIT 1");
         $statement->execute(['id' => $id]);
         $row = $statement->fetch();
         if (!$row) h_error('Not found.', 'NOT_FOUND', 404);
+        h_rls_assert($pdo, $caller, $table, 'read', h_decode_row($row));
         $decoded = h_decode_row($row);
         if ($table === 'orders') $decoded = h_attach_order_items($pdo, [$decoded])[0];
         if ($table === 'menu_items') $decoded = h_normalize_menu_item($decoded);
         if ($table === 'room_types') $decoded = h_normalize_room_type($decoded);
         if ($table === 'rooms') $decoded = h_normalize_room($decoded);
-        // A member of staff may read their own record; reading anyone else's
-        // record needs the staff permission.
-        if ($table === 'users') {
-            $caller = hayata_require_user($pdo);
-            if ($id !== $caller['id'] && !hayata_has_permission($pdo, $caller['id'], 'staff.view')) {
-                h_error('You can only view your own account.', 'FORBIDDEN', 403);
-            }
-            $decoded = h_public_user($decoded);
-        }
-        hayata_json($decoded);
+        // The row-level policy above already enforced self-or-staff.view.
+        if ($table === 'users') $decoded = h_public_user($decoded);
+        hayata_json(h_trim_response($table, $decoded));
     }
     // Orders, their lines and the menu are edited by F&B staff (waiters, bartenders,
     // managers), not only by administrators, so they get outlet-scoped permissions instead.
@@ -1457,6 +1683,7 @@ if (preg_match('#^/resource/([a-z-]+)(?:/([^/]+))?$#', $route, $matches)) {
         } else {
             $caller = hayata_require_permission($pdo, 'settings.manage');
         }
+        $body = h_resource_input($pdo, $table, $body);
         if ($table === 'rooms') {
             $number = trim((string) ($body['number'] ?? ''));
             if ($number === '') h_error('A room number is required.', 'VALIDATION', 422);
@@ -1469,7 +1696,7 @@ if (preg_match('#^/resource/([a-z-]+)(?:/([^/]+))?$#', $route, $matches)) {
             $duplicate = $pdo->prepare('SELECT COUNT(*) FROM users WHERE email = :email');
             $duplicate->execute(['email' => $email]);
             if ($duplicate->fetchColumn() > 0) h_error('A staff member with that email already exists.', 'CONFLICT', 409);
-            $role = strtolower((string) ($body['role'] ?? $body['roleId'] ?? 'waiter'));
+            $role = strtolower((string) ($body['role'] ?? $body['roleId'] ?? $body['role_id'] ?? 'waiter'));
             $roleCheck = $pdo->prepare('SELECT id FROM roles WHERE id = :id');
             $roleCheck->execute(['id' => $role]);
             if (!$roleCheck->fetchColumn()) $role = 'waiter';
@@ -1482,7 +1709,7 @@ if (preg_match('#^/resource/([a-z-]+)(?:/([^/]+))?$#', $route, $matches)) {
                 'role_id' => $role,
                 'department' => $body['department'] ?? 'Operations',
                 'status' => $body['status'] ?? 'Active',
-                'last_active' => $body['lastActive'] ?? 'Just now',
+                'last_active' => $body['last_active'] ?? $body['lastActive'] ?? 'Just now',
             ]);
         } else {
             $newId = h_insert_order_with_lines($pdo, $table, $body);
@@ -1502,7 +1729,7 @@ if (preg_match('#^/resource/([a-z-]+)(?:/([^/]+))?$#', $route, $matches)) {
         if ($table === 'reservations' && in_array((string) ($body['status'] ?? ''), ['Confirmed', 'Pending'], true)) {
             hayata_notify_reservation_event($pdo, 'booking_confirmed', $newId);
         }
-        hayata_json($created, 201);
+        hayata_json(h_trim_response($table, $created), 201);
     }
     if ($method === 'PUT' && $id) {
         if (isset($resourcePermissions[$table])) {
@@ -1510,6 +1737,11 @@ if (preg_match('#^/resource/([a-z-]+)(?:/([^/]+))?$#', $route, $matches)) {
         } else {
             $caller = hayata_require_permission($pdo, 'settings.manage');
         }
+        $existingStatement = $pdo->prepare("SELECT * FROM `$table` WHERE id = :id LIMIT 1");
+        $existingStatement->execute(['id' => $id]);
+        $existingRow = $existingStatement->fetch() ?: [];
+        h_rls_assert($pdo, $caller, $table, 'write', $existingRow);
+        $body = h_resource_input($pdo, $table, $body);
         if ($table === 'rooms' && array_key_exists('number', $body)) {
             $number = trim((string) $body['number']);
             if ($number === '') h_error('A room number is required.', 'VALIDATION', 422);
@@ -1533,11 +1765,11 @@ if (preg_match('#^/resource/([a-z-]+)(?:/([^/]+))?$#', $route, $matches)) {
                 'email' => $email !== '' ? $email : null,
                 'department' => $body['department'] ?? null,
                 'status' => $body['status'] ?? null,
-                'last_active' => $body['lastActive'] ?? null,
+                'last_active' => $body['last_active'] ?? $body['lastActive'] ?? null,
             ];
             if (!$isSelf) {
-                if (isset($body['role']) || isset($body['roleId'])) {
-                    $role = strtolower((string) ($body['role'] ?? $body['roleId']));
+                if (isset($body['role']) || isset($body['roleId']) || isset($body['role_id'])) {
+                    $role = strtolower((string) ($body['role'] ?? $body['roleId'] ?? $body['role_id']));
                     $roleCheck = $pdo->prepare('SELECT id FROM roles WHERE id = :id');
                     $roleCheck->execute(['id' => $role]);
                     if ($roleCheck->fetchColumn()) $payload['role_id'] = $role;
@@ -1562,7 +1794,7 @@ if (preg_match('#^/resource/([a-z-]+)(?:/([^/]+))?$#', $route, $matches)) {
         if ($table === 'rooms') $updated = h_normalize_room($updated);
         if ($table === 'users') $updated = h_public_user($updated);
         h_audit($pdo, $caller, 'Updated', ucfirst(str_replace('_', ' ', $table)), $id, 'Changed: ' . h_changed_fields($changed));
-        hayata_json($updated);
+        hayata_json(h_trim_response($table, $updated));
     }
     if ($method === 'DELETE' && $id) {
         if (isset($resourcePermissions[$table])) {
@@ -1570,6 +1802,11 @@ if (preg_match('#^/resource/([a-z-]+)(?:/([^/]+))?$#', $route, $matches)) {
         } else {
             $caller = hayata_require_permission($pdo, 'settings.manage');
         }
+        $existingStatement = $pdo->prepare("SELECT * FROM `$table` WHERE id = :id LIMIT 1");
+        $existingStatement->execute(['id' => $id]);
+        $existingRow = $existingStatement->fetch() ?: [];
+        if (!$existingRow) h_error('Not found.', 'NOT_FOUND', 404);
+        h_rls_assert($pdo, $caller, $table, 'write', $existingRow);
         if ($table === 'users' && $id === $caller['id']) {
             h_error('You cannot delete your own account.', 'VALIDATION', 422);
         }
@@ -1595,7 +1832,8 @@ if (preg_match('#^/resource/([a-z-]+)(?:/([^/]+))?$#', $route, $matches)) {
                 $lines = $pdo->prepare('DELETE FROM order_items WHERE order_id = :id');
                 $lines->execute(['id' => $id]);
             }
-            $statement = $pdo->prepare("DELETE FROM `$table` WHERE id = :id");
+            $keyColumn = $table === 'public_bookings' ? 'reference' : 'id';
+            $statement = $pdo->prepare("DELETE FROM `$table` WHERE `$keyColumn` = :id");
             $statement->execute(['id' => $id]);
             $pdo->commit();
         } catch (Throwable $exception) {
